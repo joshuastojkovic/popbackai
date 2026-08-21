@@ -7,81 +7,72 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
+const jsonResponse = (body: Record<string, unknown>, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
   try {
-    const body = await req.json();
+    const payload = await req.json();
+    const eventType = payload?.type as string | undefined;
+    const emailId = payload?.data?.email_id as string | undefined;
+
+    if (eventType !== "email.opened" || !emailId) {
+      return jsonResponse({ ok: true, skipped: true });
+    }
+
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    const eventType = body.type as string | undefined;
-    const emailId = body.data?.email_id as string | undefined;
-
-    // Log every webhook event for debugging
-    await supabase.from("webhook_events").insert({
-      event_type: eventType ?? "unknown",
-      email_id: emailId ?? null,
-      raw_payload: body,
-    });
-
-    if (!eventType || !emailId) {
-      return new Response(JSON.stringify({ ok: true, skipped: true, reason: "missing eventType or emailId" }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Only process open events
-    if (eventType !== "email.opened") {
-      return new Response(JSON.stringify({ ok: true, skipped: true, event: eventType }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Find the recipient record by resend email ID
-    const { data: recipient, error: rcpErr } = await supabase
+    const { data: recipient, error: recipientError } = await supabase
       .from("campaign_recipients")
       .select("id, campaign_id, opened")
       .eq("resend_email_id", emailId)
       .maybeSingle();
 
-    // Update the log with whether we matched
-    if (rcpErr || !recipient) {
-      await supabase.from("webhook_events").update({ matched: false }).eq("email_id", emailId);
-      return new Response(JSON.stringify({ ok: true, notFound: true, emailId }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    if (recipientError) {
+      console.error("Failed to find campaign recipient", recipientError);
+      return jsonResponse({ ok: false, error: "Failed to find campaign recipient" }, 500);
     }
 
-    await supabase.from("webhook_events").update({ matched: true }).eq("email_id", emailId);
+    if (!recipient) {
+      return jsonResponse({ ok: true, matched: false });
+    }
 
-    // Already marked as opened — skip to avoid double counting
     if (recipient.opened) {
-      return new Response(JSON.stringify({ ok: true, alreadyOpened: true }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return jsonResponse({ ok: true, matched: true, alreadyOpened: true });
     }
 
-    // Mark recipient as opened
-    await supabase
+    const { error: updateError } = await supabase
       .from("campaign_recipients")
       .update({ opened: true, opened_at: new Date().toISOString() })
       .eq("id", recipient.id);
 
-    // Increment campaign opened counter
-    await supabase.rpc("increment_campaign_opened", { campaign_id: recipient.campaign_id });
+    if (updateError) {
+      console.error("Failed to mark campaign recipient opened", updateError);
+      return jsonResponse({ ok: false, error: "Failed to mark recipient opened" }, 500);
+    }
 
-    return new Response(JSON.stringify({ ok: true, opened: true }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    const { error: incrementError } = await supabase.rpc("increment_campaign_opened", {
+      campaign_id: recipient.campaign_id,
     });
-  } catch (err) {
-    return new Response(
-      JSON.stringify({ error: err.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+
+    if (incrementError) {
+      console.error("Failed to increment campaign opens", incrementError);
+      return jsonResponse({ ok: false, error: "Failed to increment campaign opens" }, 500);
+    }
+
+    return jsonResponse({ ok: true, matched: true, opened: true });
+  } catch (error) {
+    console.error("Resend webhook error", error);
+    return jsonResponse({ ok: false, error: "Invalid webhook request" }, 400);
   }
 });
