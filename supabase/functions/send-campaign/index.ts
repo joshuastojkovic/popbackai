@@ -245,10 +245,12 @@ Deno.serve(async (req: Request) => {
     }
 
     // Record recipients for open & conversion tracking
+    let recipientInsertError: string | null = null;
     if (recipientRows.length > 0) {
       const CHUNK = 500;
       for (let i = 0; i < recipientRows.length; i += CHUNK) {
-        await supabase.from("campaign_recipients").insert(recipientRows.slice(i, i + CHUNK));
+        const { error: insErr } = await supabase.from("campaign_recipients").insert(recipientRows.slice(i, i + CHUNK));
+        if (insErr) recipientInsertError = insErr.message;
       }
     }
 
@@ -263,7 +265,7 @@ Deno.serve(async (req: Request) => {
       .eq("id", campaignId);
 
     return new Response(
-      JSON.stringify({ sent: sentCount, total: emailClients.length, errors }),
+      JSON.stringify({ sent: sentCount, total: emailClients.length, errors, recipientInsertError }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {
