@@ -19,13 +19,18 @@ Deno.serve(async (req: Request) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // Resend webhook payload structure:
-    // { "type": "email.opened", "created_at": "...", "data": { "email_id": "...", ... } }
     const eventType = body.type as string | undefined;
     const emailId = body.data?.email_id as string | undefined;
 
+    // Log every webhook event for debugging
+    await supabase.from("webhook_events").insert({
+      event_type: eventType ?? "unknown",
+      email_id: emailId ?? null,
+      raw_payload: body,
+    });
+
     if (!eventType || !emailId) {
-      return new Response(JSON.stringify({ ok: true, skipped: true }), {
+      return new Response(JSON.stringify({ ok: true, skipped: true, reason: "missing eventType or emailId" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -44,11 +49,15 @@ Deno.serve(async (req: Request) => {
       .eq("resend_email_id", emailId)
       .maybeSingle();
 
+    // Update the log with whether we matched
     if (rcpErr || !recipient) {
-      return new Response(JSON.stringify({ ok: true, notFound: true }), {
+      await supabase.from("webhook_events").update({ matched: false }).eq("email_id", emailId);
+      return new Response(JSON.stringify({ ok: true, notFound: true, emailId }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    await supabase.from("webhook_events").update({ matched: true }).eq("email_id", emailId);
 
     // Already marked as opened — skip to avoid double counting
     if (recipient.opened) {
