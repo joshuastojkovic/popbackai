@@ -594,7 +594,7 @@ export default function CampaignsPage() {
       await supabase.from('campaigns').update({ status: 'active', launched_at: new Date().toISOString() }).eq('id', c.id);
       setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, status: 'active', launched_at: new Date().toISOString() } : x));
       const { data: { session } } = await supabase.auth.getSession();
-      await fetch(
+      const res = await fetch(
         `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-campaign`,
         {
           method: 'POST',
@@ -605,6 +605,14 @@ export default function CampaignsPage() {
           body: JSON.stringify({ campaignId: c.id }),
         }
       );
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // Revert status back to draft since the send failed
+        await supabase.from('campaigns').update({ status: 'draft', launched_at: null }).eq('id', c.id);
+        setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, status: 'draft' as CampaignStatus, launched_at: null } : x));
+        alert(result.error ?? 'Campaign launch failed. Please try again.');
+        return;
+      }
       fetchData();
       return;
     }

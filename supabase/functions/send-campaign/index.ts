@@ -261,6 +261,8 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    console.log("Campaign sent:", { campaignId, sentCount, recipientRows: recipientRows.length, errors });
+
     await supabase
       .from("campaigns")
       .update({
