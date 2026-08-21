@@ -19,19 +19,20 @@ Deno.serve(async (req: Request) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // Resend webhook events: email.opened, email.delivered, email.bounced, etc.
-    const event = body.event as string | undefined;
-    const emailId = body.email_id as string | undefined;
+    // Resend webhook payload structure:
+    // { "type": "email.opened", "created_at": "...", "data": { "email_id": "...", ... } }
+    const eventType = body.type as string | undefined;
+    const emailId = body.data?.email_id as string | undefined;
 
-    if (!event || !emailId) {
+    if (!eventType || !emailId) {
       return new Response(JSON.stringify({ ok: true, skipped: true }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     // Only process open events
-    if (event !== "email.opened") {
-      return new Response(JSON.stringify({ ok: true, skipped: true }), {
+    if (eventType !== "email.opened") {
+      return new Response(JSON.stringify({ ok: true, skipped: true, event: eventType }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
