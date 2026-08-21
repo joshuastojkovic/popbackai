@@ -254,6 +254,13 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    if (recipientInsertError) {
+      return new Response(
+        JSON.stringify({ error: `Emails were sent, but tracking records could not be saved: ${recipientInsertError}` }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     await supabase
       .from("campaigns")
       .update({
@@ -265,7 +272,7 @@ Deno.serve(async (req: Request) => {
       .eq("id", campaignId);
 
     return new Response(
-      JSON.stringify({ sent: sentCount, total: emailClients.length, errors, recipientInsertError }),
+      JSON.stringify({ sent: sentCount, total: emailClients.length, errors }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {
