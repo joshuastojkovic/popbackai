@@ -195,6 +195,7 @@ Deno.serve(async (req: Request) => {
     const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
     let sentCount = 0;
     const errors: string[] = [];
+    const recipientRows: { campaign_id: string; client_id: string; resend_email_id: string | null; sent_at: string }[] = [];
 
     for (const client of emailClients) {
       const personalised = (campaign.message_body ?? "").replace(/\[Name\]/g, client.name ?? "there");
@@ -218,9 +219,24 @@ Deno.serve(async (req: Request) => {
 
       if (res.ok) {
         sentCount++;
+        const resBody = await res.json();
+        recipientRows.push({
+          campaign_id: campaignId,
+          client_id: client.id,
+          resend_email_id: resBody.id ?? null,
+          sent_at: new Date().toISOString(),
+        });
       } else {
         const errBody = await res.text();
         errors.push(`${client.email}: ${errBody}`);
+      }
+    }
+
+    // Record recipients for open & conversion tracking
+    if (recipientRows.length > 0) {
+      const CHUNK = 500;
+      for (let i = 0; i < recipientRows.length; i += CHUNK) {
+        await supabase.from("campaign_recipients").insert(recipientRows.slice(i, i + CHUNK));
       }
     }
 

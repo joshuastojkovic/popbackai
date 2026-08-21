@@ -553,6 +553,19 @@ export default function CampaignsPage() {
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+
+    // Recompute conversions for all campaigns with sent emails
+    const { data: activeCampaigns } = await supabase
+      .from('campaigns')
+      .select('id')
+      .gt('sent', 0);
+
+    if (activeCampaigns) {
+      await Promise.all(
+        activeCampaigns.map((c) => supabase.rpc('recompute_campaign_conversions', { campaign_id: c.id }))
+      );
+    }
+
     const [campaignRes, clientRes] = await Promise.all([
       supabase.from('campaigns').select('*').order('created_at', { ascending: false }),
       supabase.from('clients').select('id, last_visit_date'),
