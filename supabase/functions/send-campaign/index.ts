@@ -86,7 +86,7 @@ Deno.serve(async (req: Request) => {
         const textBody = `Hi ${client.name},\n\nThank you for visiting ${businessName} recently. We'd love to hear about your experience!\n\nIf you enjoyed your visit, could you take 30 seconds to leave us a Google review? It really helps us grow:\n${profile.google_review_url}\n\nIf something wasn't right, just reply to this email and we'll make it right.\n\nThank you,\n${businessName}`;
 
         const emailPayload = {
-          from: "onboarding@resend.dev",
+          from: "hello@popbackai.com",
           to: client.email,
           subject,
           text: textBody,
@@ -212,7 +212,7 @@ Deno.serve(async (req: Request) => {
       const personalised = (campaign.message_body ?? "").replace(/\[Name\]/g, client.name ?? "there");
 
       const emailPayload = {
-        from: "onboarding@resend.dev",
+        from: "hello@popbackai.com",
         to: client.email,
         subject: campaign.message_subject ?? "A message from us",
         text: personalised,
