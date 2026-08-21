@@ -134,6 +134,17 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    // Extract user ID from the auth token so we can set user_id on recipient rows.
+    // The service role key bypasses RLS but auth.uid() returns NULL, so the
+    // DEFAULT auth.uid() on user_id would violate NOT NULL — we set it explicitly.
+    const authHeader = req.headers.get("Authorization");
+    let userId: string | null = null;
+    if (authHeader) {
+      const token = authHeader.replace("Bearer ", "");
+      const { data: { user } } = await supabase.auth.getUser(token);
+      userId = user?.id ?? null;
+    }
+
     const { data: campaign, error: campErr } = await supabase
       .from("campaigns")
       .select("*")
@@ -195,7 +206,7 @@ Deno.serve(async (req: Request) => {
     const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
     let sentCount = 0;
     const errors: string[] = [];
-    const recipientRows: { campaign_id: string; client_id: string; resend_email_id: string | null; sent_at: string }[] = [];
+    const recipientRows: { campaign_id: string; client_id: string; user_id: string; resend_email_id: string | null; sent_at: string }[] = [];
 
     for (const client of emailClients) {
       const personalised = (campaign.message_body ?? "").replace(/\[Name\]/g, client.name ?? "there");
@@ -223,6 +234,7 @@ Deno.serve(async (req: Request) => {
         recipientRows.push({
           campaign_id: campaignId,
           client_id: client.id,
+          user_id: userId ?? campaign.user_id,
           resend_email_id: resBody.id ?? null,
           sent_at: new Date().toISOString(),
         });
