@@ -47,7 +47,6 @@ import {
   AlertTriangle,
   Trash2,
   XCircle,
-  MoreVertical,
 } from 'lucide-react';
 
 // ── types ────────────────────────────────────────────────────────────────────
@@ -551,7 +550,6 @@ export default function CampaignsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [launchRec, setLaunchRec] = useState<AiRecommendation | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Campaign | null>(null);
-  const [menuOpen, setMenuOpen] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -569,14 +567,12 @@ export default function CampaignsPage() {
   const handleCancelCampaign = async (c: Campaign) => {
     await supabase.from('campaigns').update({ status: 'cancelled' }).eq('id', c.id);
     setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, status: 'cancelled' } : x));
-    setMenuOpen(null);
   };
 
   const handleDeleteCampaign = async (c: Campaign) => {
     await supabase.from('campaigns').delete().eq('id', c.id);
     setCampaigns(prev => prev.filter(x => x.id !== c.id));
     setDeleteTarget(null);
-    setMenuOpen(null);
   };
 
   const handleStatusToggle = async (c: Campaign) => {
@@ -796,30 +792,16 @@ export default function CampaignsPage() {
                           <XCircle className="w-3 h-3 mr-1" /> Cancel
                         </Button>
                       )}
-                      <div className="relative">
+                      {(c.status === 'paused' || c.status === 'cancelled' || c.status === 'draft' || c.status === 'completed') && (
                         <Button
-                          variant="ghost"
+                          variant="outline"
                           size="sm"
-                          onClick={() => setMenuOpen(menuOpen === c.id ? null : c.id)}
-                          className="h-8 w-8 p-0 text-gray-400 hover:text-gray-700"
+                          onClick={() => setDeleteTarget(c)}
+                          className="border-gray-200 text-gray-500 hover:text-red-600 hover:border-red-200 hover:bg-red-50 h-8 text-xs"
                         >
-                          <MoreVertical className="w-4 h-4" />
+                          <Trash2 className="w-3 h-3 mr-1" /> Delete
                         </Button>
-                        {menuOpen === c.id && (
-                          <>
-                            <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(null)} />
-                            <div className="absolute right-0 top-full mt-1 z-20 w-44 bg-white rounded-lg shadow-lg border border-gray-100 py-1">
-                              <button
-                                onClick={() => { setDeleteTarget(c); setMenuOpen(null); }}
-                                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50 transition-colors"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                                Delete campaign
-                              </button>
-                            </div>
-                          </>
-                        )}
-                      </div>
+                      )}
                     </div>
                   </div>
                 </CardContent>
