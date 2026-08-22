@@ -204,19 +204,54 @@ Deno.serve(async (req: Request) => {
     }
 
     const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
+    const baseUrl = Deno.env.get("SUPABASE_URL")!.replace(".supabase.co", ".supabase.co");
+    const appUrl = Deno.env.get("APP_URL") ?? "https://popbackai.com";
+
+    // Step 1: Create recipient rows first so we have IDs for unsubscribe links
+    const recipientInserts = emailClients.map((c) => ({
+      campaign_id: campaignId,
+      client_id: c.id,
+      user_id: userId ?? campaign.user_id,
+      sent_at: new Date().toISOString(),
+    }));
+
+    let recipientIds: string[] = [];
+    const CHUNK = 500;
+    for (let i = 0; i < recipientInserts.length; i += CHUNK) {
+      const { data: inserted, error: insErr } = await supabase
+        .from("campaign_recipients")
+        .insert(recipientInserts.slice(i, i + CHUNK))
+        .select("id");
+      if (insErr) {
+        return new Response(
+          JSON.stringify({ error: `Failed to create tracking records: ${insErr.message}` }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      recipientIds.push(...(inserted ?? []).map((r: { id: string }) => r.id));
+    }
+
+    // Step 2: Send emails with unsubscribe links
     let sentCount = 0;
     const errors: string[] = [];
-    const recipientRows: { campaign_id: string; client_id: string; user_id: string; resend_email_id: string | null; sent_at: string }[] = [];
 
-    for (const client of emailClients) {
+    for (let i = 0; i < emailClients.length; i++) {
+      const client = emailClients[i];
+      const recipientId = recipientIds[i];
       const personalised = (campaign.message_body ?? "").replace(/\[Name\]/g, client.name ?? "there");
+      const unsubscribeUrl = `${appUrl}/unsubscribe?token=${recipientId}`;
+
+      const textBody = personalised + `\n\n---\nDon't want these emails? Unsubscribe: ${unsubscribeUrl}`;
+      const htmlBody = personalised.replace(/\n/g, "<br>") +
+        `<br><br><div style="margin-top:20px;padding-top:12px;border-top:1px solid #eee;font-size:11px;color:#999;">` +
+        `Don't want these emails? <a href="${unsubscribeUrl}" style="color:#999;">Unsubscribe</a></div>`;
 
       const emailPayload = {
         from: "hello@popbackai.com",
         to: client.email,
         subject: campaign.message_subject ?? "A message from us",
-        text: personalised,
-        html: personalised.replace(/\n/g, "<br>"),
+        text: textBody,
+        html: htmlBody,
       };
 
       const res = await fetch("https://api.resend.com/emails", {
@@ -231,34 +266,17 @@ Deno.serve(async (req: Request) => {
       if (res.ok) {
         sentCount++;
         const resBody = await res.json();
-        recipientRows.push({
-          campaign_id: campaignId,
-          client_id: client.id,
-          user_id: userId ?? campaign.user_id,
-          resend_email_id: resBody.id ?? null,
-          sent_at: new Date().toISOString(),
-        });
+        // Update the recipient row with the resend email ID
+        await supabase
+          .from("campaign_recipients")
+          .update({ resend_email_id: resBody.id ?? null })
+          .eq("id", recipientId);
       } else {
         const errBody = await res.text();
         errors.push(`${client.email}: ${errBody}`);
+        // Remove the recipient row since the email failed
+        await supabase.from("campaign_recipients").delete().eq("id", recipientId);
       }
-    }
-
-    // Record recipients for open & conversion tracking
-    let recipientInsertError: string | null = null;
-    if (recipientRows.length > 0) {
-      const CHUNK = 500;
-      for (let i = 0; i < recipientRows.length; i += CHUNK) {
-        const { error: insErr } = await supabase.from("campaign_recipients").insert(recipientRows.slice(i, i + CHUNK));
-        if (insErr) recipientInsertError = insErr.message;
-      }
-    }
-
-    if (recipientInsertError) {
-      return new Response(
-        JSON.stringify({ error: `Emails were sent, but tracking records could not be saved: ${recipientInsertError}` }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
     }
 
     console.log("Campaign sent:", { campaignId, sentCount, recipientRows: recipientRows.length, errors });

@@ -9,16 +9,30 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
+import { Switch } from '@/components/ui/switch';
 import {
   User,
   Building2,
   Shield,
+  Bell,
   Save,
   CheckCircle,
   AlertCircle,
   Eye,
   EyeOff,
+  Trash2,
 } from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { useRouter } from 'next/navigation';
 
 const BUSINESS_TYPES = [
   'Hair Salon', 'Barber Shop', 'Aesthetics Clinic', 'Nail Salon',
@@ -29,14 +43,18 @@ const tabs = [
   { id: 'profile',  label: 'Profile',  icon: User },
   { id: 'business', label: 'Business', icon: Building2 },
   { id: 'security', label: 'Security', icon: Shield },
+  { id: 'notifications', label: 'Notifications', icon: Bell },
 ];
 
 export default function SettingsPage() {
   const { profile, updateProfile, user } = useAuth();
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState('profile');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const [profileForm, setProfileForm] = useState({
     full_name: profile?.full_name ?? '',
@@ -47,6 +65,12 @@ export default function SettingsPage() {
   const [businessForm, setBusinessForm] = useState({
     business_name: profile?.business_name ?? '',
     business_type: profile?.business_type ?? '',
+  });
+
+  const [notifForm, setNotifForm] = useState({
+    email_notifications: profile?.email_notifications ?? true,
+    campaign_notifications: profile?.campaign_notifications ?? true,
+    review_notifications: profile?.review_notifications ?? true,
   });
 
   const [passwordForm, setPasswordForm] = useState({
@@ -77,6 +101,14 @@ export default function SettingsPage() {
     if (error) { setError(error); } else { showSuccess(); }
   };
 
+  const handleSaveNotifications = async () => {
+    setSaving(true);
+    setError('');
+    const { error } = await updateProfile(notifForm);
+    setSaving(false);
+    if (error) { setError(error); } else { showSuccess(); }
+  };
+
   const handleUpdatePassword = async () => {
     if (!passwordForm.newPassword) {
       setError('Please enter a new password.');
@@ -100,6 +132,19 @@ export default function SettingsPage() {
       setPasswordForm({ newPassword: '', confirmPassword: '' });
       showSuccess();
     }
+  };
+
+  const handleDeleteAccount = async () => {
+    setDeleting(true);
+    const { error } = await supabase.auth.admin.deleteUser(user?.id ?? '');
+    if (error) {
+      setError('Could not delete account. Please contact support.');
+      setDeleting(false);
+      setDeleteOpen(false);
+      return;
+    }
+    await supabase.auth.signOut();
+    router.push('/');
   };
 
   return (
@@ -256,57 +301,131 @@ export default function SettingsPage() {
           )}
 
           {activeTab === 'security' && (
+            <div className="space-y-6">
+              <Card className="border-gray-100 shadow-sm">
+                <CardHeader>
+                  <CardTitle className="text-base font-bold text-gray-900">Change Password</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                  <div className="space-y-1.5">
+                    <Label className="text-gray-700 font-medium text-sm">New password</Label>
+                    <div className="relative">
+                      <Input
+                        type={showNew ? 'text' : 'password'}
+                        value={passwordForm.newPassword}
+                        onChange={(e) => setPasswordForm((p) => ({ ...p, newPassword: e.target.value }))}
+                        placeholder="At least 8 characters"
+                        className="h-10 border-gray-200 pr-10"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowNew((v) => !v)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                      >
+                        {showNew ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-gray-700 font-medium text-sm">Confirm new password</Label>
+                    <div className="relative">
+                      <Input
+                        type={showConfirm ? 'text' : 'password'}
+                        value={passwordForm.confirmPassword}
+                        onChange={(e) => setPasswordForm((p) => ({ ...p, confirmPassword: e.target.value }))}
+                        placeholder="Repeat new password"
+                        className="h-10 border-gray-200 pr-10"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirm((v) => !v)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                      >
+                        {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="pt-2">
+                    <Button
+                      onClick={handleUpdatePassword}
+                      disabled={saving}
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-semibold"
+                    >
+                      <Shield className="w-4 h-4 mr-2" />
+                      {saving ? 'Updating...' : 'Update password'}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-red-100 shadow-sm">
+                <CardHeader>
+                  <CardTitle className="text-base font-bold text-red-700">Danger Zone</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <p className="text-sm text-gray-500 leading-relaxed">
+                    Permanently delete your account and all associated data — clients, campaigns, and tracking history. This cannot be undone.
+                  </p>
+                  <Button
+                    onClick={() => setDeleteOpen(true)}
+                    variant="outline"
+                    className="border-red-200 text-red-600 hover:bg-red-50 gap-2"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Delete account
+                  </Button>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
+          {activeTab === 'notifications' && (
             <Card className="border-gray-100 shadow-sm">
               <CardHeader>
-                <CardTitle className="text-base font-bold text-gray-900">Change Password</CardTitle>
+                <CardTitle className="text-base font-bold text-gray-900">Notification Preferences</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="space-y-1.5">
-                  <Label className="text-gray-700 font-medium text-sm">New password</Label>
-                  <div className="relative">
-                    <Input
-                      type={showNew ? 'text' : 'password'}
-                      value={passwordForm.newPassword}
-                      onChange={(e) => setPasswordForm((p) => ({ ...p, newPassword: e.target.value }))}
-                      placeholder="At least 8 characters"
-                      className="h-10 border-gray-200 pr-10"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowNew((v) => !v)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                    >
-                      {showNew ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
+              <CardContent className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">Email notifications</div>
+                    <p className="text-xs text-gray-400 mt-0.5">Receive product updates and important account emails.</p>
                   </div>
+                  <Switch
+                    checked={notifForm.email_notifications}
+                    onCheckedChange={(v) => setNotifForm((p) => ({ ...p, email_notifications: v }))}
+                  />
                 </div>
-                <div className="space-y-1.5">
-                  <Label className="text-gray-700 font-medium text-sm">Confirm new password</Label>
-                  <div className="relative">
-                    <Input
-                      type={showConfirm ? 'text' : 'password'}
-                      value={passwordForm.confirmPassword}
-                      onChange={(e) => setPasswordForm((p) => ({ ...p, confirmPassword: e.target.value }))}
-                      placeholder="Repeat new password"
-                      className="h-10 border-gray-200 pr-10"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowConfirm((v) => !v)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                    >
-                      {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
+                <Separator />
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">Campaign notifications</div>
+                    <p className="text-xs text-gray-400 mt-0.5">Get notified when a campaign is sent or completed.</p>
                   </div>
+                  <Switch
+                    checked={notifForm.campaign_notifications}
+                    onCheckedChange={(v) => setNotifForm((p) => ({ ...p, campaign_notifications: v }))}
+                  />
                 </div>
+                <Separator />
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">Review booster notifications</div>
+                    <p className="text-xs text-gray-400 mt-0.5">Get notified when review requests are sent or completed.</p>
+                  </div>
+                  <Switch
+                    checked={notifForm.review_notifications}
+                    onCheckedChange={(v) => setNotifForm((p) => ({ ...p, review_notifications: v }))}
+                  />
+                </div>
+
                 <div className="pt-2">
                   <Button
-                    onClick={handleUpdatePassword}
+                    onClick={handleSaveNotifications}
                     disabled={saving}
                     className="bg-blue-600 hover:bg-blue-700 text-white font-semibold"
                   >
-                    <Shield className="w-4 h-4 mr-2" />
-                    {saving ? 'Updating...' : 'Update password'}
+                    <Save className="w-4 h-4 mr-2" />
+                    {saving ? 'Saving...' : 'Save preferences'}
                   </Button>
                 </div>
               </CardContent>
@@ -314,6 +433,27 @@ export default function SettingsPage() {
           )}
         </div>
       </div>
+
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete your account?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete your account, all clients, campaigns, and tracking data. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteAccount}
+              disabled={deleting}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              {deleting ? 'Deleting...' : 'Delete forever'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

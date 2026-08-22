@@ -14,6 +14,10 @@ export type Profile = {
   phone: string | null;
   avatar_url: string | null;
   google_review_url: string | null;
+  email_notifications: boolean | null;
+  campaign_notifications: boolean | null;
+  review_notifications: boolean | null;
+  onboarding_completed: boolean | null;
   created_at: string;
   updated_at: string;
 };

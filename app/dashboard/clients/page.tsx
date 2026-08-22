@@ -8,6 +8,22 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import {
   Search,
   Users,
@@ -27,6 +43,11 @@ import {
   Calendar,
   Download,
   RefreshCw,
+  Pencil,
+  ChevronLeft,
+  ChevronRight,
+  Repeat,
+  Star,
 } from 'lucide-react';
 
 type Client = {
@@ -36,14 +57,26 @@ type Client = {
   phone: string | null;
   last_visit_date: string | null;
   source: string | null;
+  notes: string | null;
+  review_requested: boolean;
+  review_completed: boolean;
   created_at: string;
+};
+
+type CampaignRecipient = {
+  id: string;
+  campaign_id: string;
+  opened: boolean;
+  converted: boolean;
+  sent_at: string;
+  campaign_name?: string;
 };
 
 type SortField = 'name' | 'last_visit_date' | 'status';
 type SortDir = 'asc' | 'desc';
 type StatusFilter = 'all' | 'active' | 'lapsed' | 'unknown';
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+const PAGE_SIZE = 25;
 
 const STATUS_CONFIG = {
   active: {
@@ -74,6 +107,11 @@ function formatDate(iso: string | null) {
   return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+function formatDateTime(iso: string | null) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
 function SortIcon({ field, active, dir }: { field: string; active: boolean; dir: SortDir }) {
   if (!active) return <ChevronsUpDown className="w-3.5 h-3.5 text-gray-300" />;
   return dir === 'asc'
@@ -81,15 +119,36 @@ function SortIcon({ field, active, dir }: { field: string; active: boolean; dir:
     : <ChevronDown className="w-3.5 h-3.5 text-blue-600" />;
 }
 
-// ── main component ────────────────────────────────────────────────────────────
+function toCSV(clients: Client[]): string {
+  const headers = ['Name', 'Email', 'Phone', 'Last Visit Date', 'Status', 'Source', 'Review Requested', 'Review Completed'];
+  const rows = clients.map((c) => {
+    const status = clientStatus(c.last_visit_date);
+    return [
+      c.name,
+      c.email ?? '',
+      c.phone ?? '',
+      c.last_visit_date ?? '',
+      status,
+      c.source ?? '',
+      c.review_requested ? 'Yes' : 'No',
+      c.review_completed ? 'Yes' : 'No',
+    ].map((v) => {
+      const s = String(v);
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+    }).join(',');
+  });
+  return [headers.join(','), ...rows].join('\n');
+}
 
 export default function ClientListPage() {
   const [clients, setClients] = useState<Client[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
   const [pendingClients, setPendingClients] = useState<ParsedClient[]>([]);
-  const [importSuccess, setImportSuccess] = useState<{ count: number } | null>(null);
+  const [duplicateCount, setDuplicateCount] = useState(0);
+  const [importSuccess, setImportSuccess] = useState<{ count: number; duplicates: number } | null>(null);
   const [importError, setImportError] = useState('');
   const [showUploadPanel, setShowUploadPanel] = useState(false);
 
@@ -99,24 +158,72 @@ export default function ClientListPage() {
   const [sortField, setSortField] = useState<SortField>('last_visit_date');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [page, setPage] = useState(0);
 
-  // ── data fetching ──────────────────────────────────────────────────────────
+  // edit state
+  const [editClient, setEditClient] = useState<Client | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', email: '', phone: '', last_visit_date: '', notes: '' });
+  const [editSaving, setEditSaving] = useState(false);
+
+  // detail drawer state
+  const [detailClient, setDetailClient] = useState<Client | null>(null);
+  const [detailRecipients, setDetailRecipients] = useState<CampaignRecipient[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  // ── data fetching ──────────────────────────────────────────────────────
 
   const fetchClients = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase
+
+    let countQuery = supabase.from('clients').select('id', { count: 'exact', head: true });
+    let dataQuery = supabase
       .from('clients')
-      .select('id, name, email, phone, last_visit_date, source, created_at')
-      .order('created_at', { ascending: false });
-    if (!error && data) setClients(data);
+      .select('id, name, email, phone, last_visit_date, source, notes, review_requested, review_completed, created_at');
+
+    if (statusFilter !== 'all') {
+      if (statusFilter === 'active') {
+        const cutoff = new Date(Date.now() - 60 * 86400000).toISOString().split('T')[0];
+        countQuery = countQuery.gte('last_visit_date', cutoff);
+        dataQuery = dataQuery.gte('last_visit_date', cutoff);
+      } else if (statusFilter === 'lapsed') {
+        const cutoff = new Date(Date.now() - 60 * 86400000).toISOString().split('T')[0];
+        countQuery = countQuery.lte('last_visit_date', cutoff);
+        dataQuery = dataQuery.lte('last_visit_date', cutoff);
+      } else if (statusFilter === 'unknown') {
+        countQuery = countQuery.is('last_visit_date', null);
+        dataQuery = dataQuery.is('last_visit_date', null);
+      }
+    }
+
+    if (search.trim()) {
+      const s = `%${search.trim()}%`;
+      countQuery = countQuery.or(`name.ilike.${s},email.ilike.${s},phone.ilike.${s}`);
+      dataQuery = dataQuery.or(`name.ilike.${s},email.ilike.${s},phone.ilike.${s}`);
+    }
+
+    const sortCol = sortField === 'status' ? 'last_visit_date' : sortField;
+    dataQuery = dataQuery.order(sortCol, { ascending: sortDir === 'asc' });
+    if (sortField === 'name') dataQuery = dataQuery.order('name', { ascending: sortDir === 'asc' });
+
+    dataQuery = dataQuery.range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+
+    const [countRes, dataRes] = await Promise.all([countQuery, dataQuery]);
+
+    if (countRes.count !== null) setTotalCount(countRes.count);
+    if (!dataRes.error && dataRes.data) setClients(dataRes.data);
     setLoading(false);
-  }, []);
+  }, [statusFilter, search, sortField, sortDir, page]);
 
   useEffect(() => {
     fetchClients();
   }, [fetchClients]);
 
-  // ── CSV handling ───────────────────────────────────────────────────────────
+  // Reset page when filters change
+  useEffect(() => {
+    setPage(0);
+  }, [statusFilter, search]);
+
+  // ── CSV handling ───────────────────────────────────────────────────────
 
   const handleFileParsed = (text: string, _filename: string) => {
     const result = parseCSV(text);
@@ -124,6 +231,7 @@ export default function ClientListPage() {
     setPendingClients(result.clients);
     setImportError('');
     setImportSuccess(null);
+    setDuplicateCount(0);
   };
 
   const handleConfirmImport = async () => {
@@ -131,7 +239,36 @@ export default function ClientListPage() {
     setUploading(true);
     setImportError('');
 
-    const rows = pendingClients.map((c) => ({
+    // Fetch existing clients to detect duplicates
+    const { data: existing } = await supabase
+      .from('clients')
+      .select('name, email');
+
+    const existingEmails = new Set((existing ?? []).map((c: { email: string | null }) => c.email?.toLowerCase()).filter(Boolean));
+    const existingNames = new Set((existing ?? []).filter((c: { email: string | null }) => !c.email).map((c: { name: string }) => c.name.toLowerCase()));
+
+    const unique: ParsedClient[] = [];
+    const seenInBatch = new Set<string>();
+    let dups = 0;
+
+    for (const c of pendingClients) {
+      const key = c.email ? c.email.toLowerCase() : c.name.toLowerCase();
+      if (c.email && existingEmails.has(key)) { dups++; continue; }
+      if (!c.email && existingNames.has(key)) { dups++; continue; }
+      if (seenInBatch.has(key)) { dups++; continue; }
+      seenInBatch.add(key);
+      unique.push(c);
+    }
+
+    setDuplicateCount(dups);
+
+    if (unique.length === 0) {
+      setImportError(`All ${pendingClients.length} clients already exist in your list — no new clients to import.`);
+      setUploading(false);
+      return;
+    }
+
+    const rows = unique.map((c) => ({
       name: c.name,
       email: c.email || null,
       phone: c.phone || null,
@@ -139,7 +276,6 @@ export default function ClientListPage() {
       source: 'csv',
     }));
 
-    // batch in chunks of 500 to avoid payload limits
     const CHUNK = 500;
     let totalInserted = 0;
     for (let i = 0; i < rows.length; i += CHUNK) {
@@ -152,7 +288,7 @@ export default function ClientListPage() {
       totalInserted += Math.min(CHUNK, rows.length - i);
     }
 
-    setImportSuccess({ count: totalInserted });
+    setImportSuccess({ count: totalInserted, duplicates: dups });
     setPendingClients([]);
     setParseResult(null);
     setShowUploadPanel(false);
@@ -163,9 +299,10 @@ export default function ClientListPage() {
   const handleCancelImport = () => {
     setPendingClients([]);
     setParseResult(null);
+    setDuplicateCount(0);
   };
 
-  // ── delete ─────────────────────────────────────────────────────────────────
+  // ── delete ─────────────────────────────────────────────────────────────
 
   const handleDeleteSelected = async () => {
     if (selected.size === 0) return;
@@ -173,11 +310,100 @@ export default function ClientListPage() {
     const { error } = await supabase.from('clients').delete().in('id', ids);
     if (!error) {
       setClients((prev) => prev.filter((c) => !ids.includes(c.id)));
+      setTotalCount((prev) => Math.max(0, prev - ids.length));
       setSelected(new Set());
     }
   };
 
-  // ── sort ───────────────────────────────────────────────────────────────────
+  // ── edit ───────────────────────────────────────────────────────────────
+
+  const handleEditClick = (client: Client) => {
+    setEditClient(client);
+    setEditForm({
+      name: client.name,
+      email: client.email ?? '',
+      phone: client.phone ?? '',
+      last_visit_date: client.last_visit_date ?? '',
+      notes: client.notes ?? '',
+    });
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editClient) return;
+    if (!editForm.name.trim()) return;
+    setEditSaving(true);
+    const { error } = await supabase
+      .from('clients')
+      .update({
+        name: editForm.name.trim(),
+        email: editForm.email.trim() || null,
+        phone: editForm.phone.trim() || null,
+        last_visit_date: editForm.last_visit_date || null,
+        notes: editForm.notes.trim() || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', editClient.id);
+    setEditSaving(false);
+    if (!error) {
+      setClients((prev) => prev.map((c) => c.id === editClient.id ? {
+        ...c,
+        name: editForm.name.trim(),
+        email: editForm.email.trim() || null,
+        phone: editForm.phone.trim() || null,
+        last_visit_date: editForm.last_visit_date || null,
+        notes: editForm.notes.trim() || null,
+      } : c));
+      setEditClient(null);
+    }
+  };
+
+  // ── detail drawer ──────────────────────────────────────────────────────
+
+  const handleRowClick = async (client: Client) => {
+    setDetailClient(client);
+    setDetailLoading(true);
+    const { data: recipients } = await supabase
+      .from('campaign_recipients')
+      .select('id, campaign_id, opened, converted, sent_at')
+      .eq('client_id', client.id)
+      .order('sent_at', { ascending: false });
+
+    if (recipients && recipients.length > 0) {
+      const campaignIds = Array.from(new Set(recipients.map((r) => r.campaign_id)));
+      const { data: campaigns } = await supabase
+        .from('campaigns')
+        .select('id, name')
+        .in('id', campaignIds);
+      const campaignMap = new Map((campaigns ?? []).map((c: { id: string; name: string }) => [c.id, c.name]));
+      const enriched = recipients.map((r) => ({ ...r, campaign_name: campaignMap.get(r.campaign_id) ?? 'Unknown' }));
+      setDetailRecipients(enriched);
+    } else {
+      setDetailRecipients([]);
+    }
+    setDetailLoading(false);
+  };
+
+  // ── export ─────────────────────────────────────────────────────────────
+
+  const handleExport = async () => {
+    const { data: allClients, error } = await supabase
+      .from('clients')
+      .select('id, name, email, phone, last_visit_date, source, notes, review_requested, review_completed, created_at')
+      .order('created_at', { ascending: false });
+
+    if (error || !allClients) return;
+
+    const csv = toCSV(allClients as Client[]);
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `popbackai-clients-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ── sort ───────────────────────────────────────────────────────────────
 
   const toggleSort = (field: SortField) => {
     if (sortField === field) {
@@ -188,7 +414,7 @@ export default function ClientListPage() {
     }
   };
 
-  // ── derived data ───────────────────────────────────────────────────────────
+  // ── derived data ───────────────────────────────────────────────────────
 
   const enriched = clients.map((c) => ({
     ...c,
@@ -196,46 +422,19 @@ export default function ClientListPage() {
     daysSince: daysSinceVisit(c.last_visit_date),
   }));
 
-  const filtered = enriched
-    .filter((c) => {
-      const q = search.toLowerCase();
-      const matchSearch =
-        !q ||
-        c.name.toLowerCase().includes(q) ||
-        (c.email ?? '').toLowerCase().includes(q) ||
-        (c.phone ?? '').includes(q);
-      const matchStatus = statusFilter === 'all' || c.status === statusFilter;
-      return matchSearch && matchStatus;
-    })
-    .sort((a, b) => {
-      let cmp = 0;
-      if (sortField === 'name') cmp = a.name.localeCompare(b.name);
-      else if (sortField === 'status') cmp = a.status.localeCompare(b.status);
-      else {
-        const da = a.last_visit_date ?? '';
-        const db = b.last_visit_date ?? '';
-        cmp = da < db ? -1 : da > db ? 1 : 0;
-      }
-      return sortDir === 'asc' ? cmp : -cmp;
-    });
-
-  const counts = {
-    all: enriched.length,
-    active: enriched.filter((c) => c.status === 'active').length,
-    lapsed: enriched.filter((c) => c.status === 'lapsed').length,
-    unknown: enriched.filter((c) => c.status === 'unknown').length,
-  };
-
-  const allSelected = filtered.length > 0 && filtered.every((c) => selected.has(c.id));
+  const allSelected = enriched.length > 0 && enriched.every((c) => selected.has(c.id));
   const toggleSelectAll = () => {
     if (allSelected) {
-      setSelected((s) => { const next = new Set(s); filtered.forEach((c) => next.delete(c.id)); return next; });
+      setSelected((s) => { const next = new Set(s); enriched.forEach((c) => next.delete(c.id)); return next; });
     } else {
-      setSelected((s) => { const next = new Set(s); filtered.forEach((c) => next.add(c.id)); return next; });
+      setSelected((s) => { const next = new Set(s); enriched.forEach((c) => next.add(c.id)); return next; });
     }
   };
 
-  // ── render ─────────────────────────────────────────────────────────────────
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const statusCounts = {
+    all: totalCount,
+  };
 
   return (
     <div className="p-6 lg:p-8 space-y-6 max-w-screen-xl">
@@ -245,7 +444,7 @@ export default function ClientListPage() {
         <div>
           <h2 className="text-xl font-bold text-gray-900">Client List</h2>
           <p className="text-sm text-gray-500 mt-0.5">
-            {loading ? 'Loading...' : `${counts.all} clients · ${counts.lapsed} lapsed · ${counts.active} active`}
+            {loading ? 'Loading...' : `${totalCount} total clients`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -261,8 +460,18 @@ export default function ClientListPage() {
             </Button>
           )}
           <Button
+            variant="outline"
             size="sm"
-            onClick={() => { setShowUploadPanel((v) => !v); setParseResult(null); setPendingClients([]); }}
+            onClick={handleExport}
+            disabled={totalCount === 0}
+            className="border-gray-200 text-gray-600 hover:bg-gray-50 gap-1.5"
+          >
+            <Download className="w-4 h-4" />
+            Export
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => { setShowUploadPanel((v) => !v); setParseResult(null); setPendingClients([]); setDuplicateCount(0); }}
             className="bg-blue-600 hover:bg-blue-700 text-white font-semibold gap-1.5"
           >
             <Upload className="w-4 h-4" />
@@ -275,7 +484,10 @@ export default function ClientListPage() {
       {importSuccess && (
         <div className="flex items-center gap-3 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-medium">
           <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0" />
-          <span>{importSuccess.count} clients imported successfully.</span>
+          <span>
+            {importSuccess.count} clients imported successfully.
+            {importSuccess.duplicates > 0 && ` ${importSuccess.duplicates} duplicate${importSuccess.duplicates !== 1 ? 's' : ''} skipped.`}
+          </span>
           <button onClick={() => setImportSuccess(null)} className="ml-auto text-emerald-400 hover:text-emerald-700">
             <X className="w-4 h-4" />
           </button>
@@ -293,7 +505,7 @@ export default function ClientListPage() {
                   Supports exports from Fresha, Square, and any standard CSV format
                 </p>
               </div>
-              <button onClick={() => { setShowUploadPanel(false); setParseResult(null); setPendingClients([]); }}
+              <button onClick={() => { setShowUploadPanel(false); setParseResult(null); setPendingClients([]); setDuplicateCount(0); }}
                 className="text-gray-400 hover:text-gray-600">
                 <X className="w-4 h-4" />
               </button>
@@ -340,7 +552,7 @@ export default function ClientListPage() {
                 <div className="flex items-center justify-between p-4 rounded-xl bg-blue-50 border border-blue-100">
                   <div className="flex items-center gap-3">
                     <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center">
-                      <Users className="w-4.5 h-4.5 text-blue-600 w-5 h-5" />
+                      <Users className="w-5 h-5 text-blue-600" />
                     </div>
                     <div>
                       <div className="text-sm font-bold text-gray-900">
@@ -425,11 +637,11 @@ export default function ClientListPage() {
       {/* Status filter pills */}
       <div className="flex flex-wrap gap-2">
         {([
-          { key: 'all',     label: 'All clients',   icon: Users,      count: counts.all },
-          { key: 'active',  label: 'Active',         icon: UserCheck,  count: counts.active },
-          { key: 'lapsed',  label: 'Lapsed',         icon: UserX,      count: counts.lapsed },
-          { key: 'unknown', label: 'No visit date',  icon: HelpCircle, count: counts.unknown },
-        ] as const).map(({ key, label, icon: Icon, count }) => (
+          { key: 'all',     label: 'All clients',   icon: Users,      count: totalCount },
+          { key: 'active',  label: 'Active',         icon: UserCheck  },
+          { key: 'lapsed',  label: 'Lapsed',         icon: UserX      },
+          { key: 'unknown', label: 'No visit date',  icon: HelpCircle },
+        ] as const).map(({ key, label, icon: Icon }) => (
           <button
             key={key}
             onClick={() => setStatusFilter(key)}
@@ -441,11 +653,6 @@ export default function ClientListPage() {
           >
             <Icon className="w-3.5 h-3.5" />
             {label}
-            <span className={`px-1.5 py-0.5 rounded-full text-xs font-bold ${
-              statusFilter === key ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-500'
-            }`}>
-              {count}
-            </span>
           </button>
         ))}
       </div>
@@ -473,7 +680,7 @@ export default function ClientListPage() {
             <RefreshCw className="w-6 h-6 animate-spin mb-3 text-blue-400" />
             <p className="text-sm">Loading your clients...</p>
           </div>
-        ) : clients.length === 0 ? (
+        ) : totalCount === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center px-8">
             <div className="w-16 h-16 rounded-2xl bg-gray-100 flex items-center justify-center mb-4">
               <Users className="w-8 h-8 text-gray-300" />
@@ -490,7 +697,7 @@ export default function ClientListPage() {
               <Upload className="w-4 h-4" /> Import CSV
             </Button>
           </div>
-        ) : filtered.length === 0 ? (
+        ) : enriched.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-gray-400 text-sm">
             <Search className="w-6 h-6 mb-2 text-gray-300" />
             No clients match your search or filter.
@@ -538,10 +745,11 @@ export default function ClientListPage() {
                   <th className="px-4 py-3 hidden sm:table-cell">
                     <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Source</span>
                   </th>
+                  <th className="w-10 px-4 py-3"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {filtered.map((client) => {
+                {enriched.map((client) => {
                   const cfg = STATUS_CONFIG[client.status];
                   const isSelected = selected.has(client.id);
                   return (
@@ -563,21 +771,20 @@ export default function ClientListPage() {
                           className="w-4 h-4 rounded border-gray-300 text-blue-600 cursor-pointer"
                         />
                       </td>
-                      <td className="px-4 py-3.5">
+                      <td className="px-4 py-3.5 cursor-pointer" onClick={() => handleRowClick(client)}>
                         <div className="flex items-center gap-3">
                           <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 text-xs font-bold flex-shrink-0">
                             {client.name[0]?.toUpperCase()}
                           </div>
                           <div>
                             <div className="font-semibold text-gray-900 text-sm">{client.name}</div>
-                            {/* Mobile contact line */}
                             <div className="md:hidden text-xs text-gray-400 mt-0.5">
                               {client.email || client.phone || 'No contact info'}
                             </div>
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-3.5 hidden md:table-cell">
+                      <td className="px-4 py-3.5 hidden md:table-cell cursor-pointer" onClick={() => handleRowClick(client)}>
                         <div className="space-y-0.5">
                           {client.email && (
                             <div className="flex items-center gap-1.5 text-xs text-gray-600">
@@ -596,7 +803,7 @@ export default function ClientListPage() {
                           )}
                         </div>
                       </td>
-                      <td className="px-4 py-3.5 hidden lg:table-cell">
+                      <td className="px-4 py-3.5 hidden lg:table-cell cursor-pointer" onClick={() => handleRowClick(client)}>
                         <div className="flex items-center gap-1.5 text-sm text-gray-600">
                           <Calendar className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
                           <span>{formatDate(client.last_visit_date)}</span>
@@ -607,7 +814,7 @@ export default function ClientListPage() {
                           </div>
                         )}
                       </td>
-                      <td className="px-4 py-3.5">
+                      <td className="px-4 py-3.5 cursor-pointer" onClick={() => handleRowClick(client)}>
                         <Badge className={`${cfg.bg} ${cfg.color} border ${cfg.border} text-xs font-semibold`}>
                           <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot} mr-1.5 inline-block`} />
                           {cfg.label}
@@ -616,25 +823,259 @@ export default function ClientListPage() {
                       <td className="px-4 py-3.5 hidden sm:table-cell">
                         <span className="text-xs text-gray-400 capitalize">{client.source ?? 'csv'}</span>
                       </td>
+                      <td className="px-4 py-3.5">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleEditClick(client); }}
+                          className="text-gray-300 hover:text-blue-600 transition-colors p-1 rounded"
+                          title="Edit client"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
 
-            {/* Table footer */}
+            {/* Table footer with pagination */}
             <div className="px-4 py-3 border-t border-gray-50 flex items-center justify-between bg-gray-50/50">
               <span className="text-xs text-gray-400">
-                Showing {filtered.length} of {clients.length} clients
+                Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalCount)} of {totalCount} clients
                 {selected.size > 0 && ` · ${selected.size} selected`}
               </span>
-              <span className="text-xs text-gray-400">
-                Active: 60 days · Lapsed: &gt;60 days
-              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={page === 0}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <span className="text-xs text-gray-500 px-2">
+                  Page {page + 1} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                  disabled={page >= totalPages - 1}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
         )}
       </Card>
+
+      {/* Edit dialog */}
+      <Dialog open={!!editClient} onOpenChange={(v) => !v && setEditClient(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold text-gray-900">Edit Client</DialogTitle>
+            <DialogDescription>Update this client's details.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-gray-700">Name</Label>
+              <Input
+                value={editForm.name}
+                onChange={(e) => setEditForm((p) => ({ ...p, name: e.target.value }))}
+                className="h-10 border-gray-200"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-gray-700">Email</Label>
+              <Input
+                type="email"
+                value={editForm.email}
+                onChange={(e) => setEditForm((p) => ({ ...p, email: e.target.value }))}
+                placeholder="No email"
+                className="h-10 border-gray-200"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-gray-700">Phone</Label>
+              <Input
+                value={editForm.phone}
+                onChange={(e) => setEditForm((p) => ({ ...p, phone: e.target.value }))}
+                placeholder="No phone"
+                className="h-10 border-gray-200"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-gray-700">Last Visit Date</Label>
+              <input
+                type="date"
+                value={editForm.last_visit_date}
+                onChange={(e) => setEditForm((p) => ({ ...p, last_visit_date: e.target.value }))}
+                className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-white text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-gray-700">Notes</Label>
+              <Textarea
+                value={editForm.notes}
+                onChange={(e) => setEditForm((p) => ({ ...p, notes: e.target.value }))}
+                placeholder="Add a note..."
+                rows={3}
+                className="border-gray-200 resize-none text-sm"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditClient(null)}>Cancel</Button>
+            <Button
+              onClick={handleSaveEdit}
+              disabled={editSaving || !editForm.name.trim()}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              {editSaving ? 'Saving...' : 'Save changes'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Detail drawer */}
+      <Sheet open={!!detailClient} onOpenChange={(v) => !v && setDetailClient(null)}>
+        <SheetContent className="w-full sm:max-w-md overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle className="text-lg font-bold text-gray-900">Client Details</SheetTitle>
+          </SheetHeader>
+          {detailClient && (
+            <div className="space-y-6 mt-6">
+              {/* Profile */}
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 text-xl font-bold flex-shrink-0">
+                  {detailClient.name[0]?.toUpperCase()}
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-bold text-gray-900 text-lg">{detailClient.name}</h3>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <Badge className={`${STATUS_CONFIG[clientStatus(detailClient.last_visit_date)].bg} ${STATUS_CONFIG[clientStatus(detailClient.last_visit_date)].color} border ${STATUS_CONFIG[clientStatus(detailClient.last_visit_date)].border} text-xs font-semibold`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${STATUS_CONFIG[clientStatus(detailClient.last_visit_date)].dot} mr-1.5 inline-block`} />
+                      {STATUS_CONFIG[clientStatus(detailClient.last_visit_date)].label}
+                    </Badge>
+                    <span className="text-xs text-gray-400">
+                      {daysSinceVisit(detailClient.last_visit_date) !== null
+                        ? `${daysSinceVisit(detailClient.last_visit_date)}d since last visit`
+                        : 'No visit date'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Contact info */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Contact</h4>
+                {detailClient.email && (
+                  <div className="flex items-center gap-2 text-sm text-gray-700">
+                    <Mail className="w-4 h-4 text-gray-400" />
+                    <span className="truncate">{detailClient.email}</span>
+                  </div>
+                )}
+                {detailClient.phone && (
+                  <div className="flex items-center gap-2 text-sm text-gray-700">
+                    <Phone className="w-4 h-4 text-gray-400" />
+                    <span>{detailClient.phone}</span>
+                  </div>
+                )}
+                {!detailClient.email && !detailClient.phone && (
+                  <p className="text-sm text-gray-400">No contact info on file.</p>
+                )}
+              </div>
+
+              {/* Visit info */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Visit History</h4>
+                <div className="flex items-center gap-2 text-sm text-gray-700">
+                  <Calendar className="w-4 h-4 text-gray-400" />
+                  <span>Last visit: {formatDate(detailClient.last_visit_date)}</span>
+                </div>
+                <div className="flex items-center gap-2 text-sm text-gray-500">
+                  <span className="text-xs">Added: {formatDate(detailClient.created_at)}</span>
+                </div>
+                {detailClient.source && (
+                  <div className="text-xs text-gray-400 capitalize">Source: {detailClient.source}</div>
+                )}
+              </div>
+
+              {/* Review status */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Review Status</h4>
+                <div className="flex items-center gap-2">
+                  <Star className={`w-4 h-4 ${detailClient.review_requested ? 'text-amber-500' : 'text-gray-300'}`} />
+                  <span className="text-sm text-gray-700">
+                    {detailClient.review_requested ? 'Review requested' : 'No review requested'}
+                  </span>
+                </div>
+                {detailClient.review_completed && (
+                  <div className="flex items-center gap-2">
+                    <CheckCircle className="w-4 h-4 text-emerald-500" />
+                    <span className="text-sm text-emerald-700">Review completed</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Notes */}
+              {detailClient.notes && (
+                <div className="space-y-2">
+                  <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Notes</h4>
+                  <p className="text-sm text-gray-600 bg-gray-50 rounded-lg p-3">{detailClient.notes}</p>
+                </div>
+              )}
+
+              {/* Campaign history */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Campaign History</h4>
+                {detailLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-gray-400">
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Loading...
+                  </div>
+                ) : detailRecipients.length === 0 ? (
+                  <div className="flex items-center gap-2 text-sm text-gray-400">
+                    <Repeat className="w-4 h-4" />
+                    No campaigns sent to this client yet.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {detailRecipients.map((r) => (
+                      <div key={r.id} className="flex items-center justify-between p-3 rounded-lg bg-gray-50 border border-gray-100">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-gray-800 truncate">{r.campaign_name}</div>
+                          <div className="text-xs text-gray-400">{formatDateTime(r.sent_at)}</div>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          {r.opened && (
+                            <Badge className="bg-blue-50 text-blue-700 border border-blue-100 text-xs">Opened</Badge>
+                          )}
+                          {r.converted && (
+                            <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-100 text-xs">Converted</Badge>
+                          )}
+                          {!r.opened && !r.converted && (
+                            <Badge className="bg-gray-100 text-gray-500 border border-gray-200 text-xs">Sent</Badge>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Edit button */}
+              <Button
+                onClick={() => { handleEditClick(detailClient); setDetailClient(null); }}
+                variant="outline"
+                className="w-full gap-2"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                Edit client
+              </Button>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

@@ -388,11 +388,11 @@ export default function LandingPage() {
               <span className="text-white font-bold text-lg">PopbackAI</span>
             </div>
             <div className="flex items-center gap-6 text-sm">
-              <a href="#" className="hover:text-white transition-colors">Privacy</a>
-              <a href="#" className="hover:text-white transition-colors">Terms</a>
-              <a href="#" className="hover:text-white transition-colors">Support</a>
+              <Link href="/privacy" className="hover:text-white transition-colors">Privacy</Link>
+              <Link href="/terms" className="hover:text-white transition-colors">Terms</Link>
+              <Link href="/support" className="hover:text-white transition-colors">Support</Link>
             </div>
-            <div className="text-sm">© 2025 PopbackAI. All rights reserved.</div>
+            <div className="text-sm">© 2026 PopbackAI. All rights reserved.</div>
           </div>
         </div>
       </footer>

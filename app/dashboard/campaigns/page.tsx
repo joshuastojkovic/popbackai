@@ -47,7 +47,9 @@ import {
   AlertTriangle,
   Trash2,
   XCircle,
+  Calendar,
 } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
 
 // ── types ────────────────────────────────────────────────────────────────────
 
@@ -70,6 +72,7 @@ type Campaign = {
   converted: number;
   created_at: string;
   launched_at: string | null;
+  scheduled_for: string | null;
 };
 
 type ClientRow = {
@@ -220,6 +223,9 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
   const [segment, setSegment] = useState<Segment>('lapsed_90');
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [scheduleDate, setScheduleDate] = useState('');
+  const [scheduleTime, setScheduleTime] = useState('09:00');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -232,6 +238,9 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
       setSegment('lapsed_90');
       setSubject('');
       setBody('');
+      setScheduleEnabled(false);
+      setScheduleDate('');
+      setScheduleTime('09:00');
       setError('');
     }
   }, [open, initialRec]);
@@ -263,6 +272,9 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
     setError('');
 
     const segmentOption = SEGMENT_OPTIONS.find(s => s.value === segment);
+    const scheduledFor = scheduleEnabled && scheduleDate
+      ? new Date(`${scheduleDate}T${scheduleTime}:00`).toISOString()
+      : null;
     const { data: inserted, error: err } = await supabase.from('campaigns').insert({
       name: name.trim(),
       status: launch ? 'active' : 'draft',
@@ -273,6 +285,7 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
       message_body: body.trim() || null,
       recipient_count: recipientCount,
       launched_at: launch ? new Date().toISOString() : null,
+      scheduled_for: scheduledFor,
     }).select('id').single();
 
     if (err || !inserted) {
@@ -423,15 +436,19 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
                       {(['email', 'sms'] as Channel[]).map(ch => (
                         <button
                           key={ch}
-                          onClick={() => setChannel(ch)}
+                          onClick={() => ch === 'email' && setChannel(ch)}
+                          disabled={ch === 'sms'}
                           className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-semibold transition-all ${
                             channel === ch
                               ? 'bg-blue-600 text-white border-blue-600'
-                              : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
-                          }`}
+                              : ch === 'sms'
+                                ? 'bg-gray-50 text-gray-300 border-gray-100 cursor-not-allowed'
+                                : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+                          }`
+                          }
                         >
                           {ch === 'email' ? <Mail className="w-3.5 h-3.5" /> : <MessageSquare className="w-3.5 h-3.5" />}
-                          {ch.toUpperCase()}
+                          {ch === 'sms' ? 'SMS (Soon)' : ch.toUpperCase()}
                         </button>
                       ))}
                     </div>
@@ -493,6 +510,45 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
                   <p className="text-xs text-gray-400 mt-1">Use [Name] to insert the client's name automatically.</p>
                 </div>
 
+                {/* Schedule */}
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={scheduleEnabled}
+                      onChange={(e) => setScheduleEnabled(e.target.checked)}
+                      className="w-4 h-4 rounded border-gray-300 text-blue-600 cursor-pointer"
+                    />
+                    <span className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
+                      <Calendar className="w-3.5 h-3.5" />
+                      Schedule for later
+                    </span>
+                  </label>
+                  {scheduleEnabled && (
+                    <div className="grid grid-cols-2 gap-3 pl-6">
+                      <div>
+                        <Label className="text-xs text-gray-500 mb-1 block">Date</Label>
+                        <input
+                          type="date"
+                          value={scheduleDate}
+                          onChange={(e) => setScheduleDate(e.target.value)}
+                          min={new Date().toISOString().split('T')[0]}
+                          className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-white text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs text-gray-500 mb-1 block">Time</Label>
+                        <input
+                          type="time"
+                          value={scheduleTime}
+                          onChange={(e) => setScheduleTime(e.target.value)}
+                          className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-white text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {error && (
                   <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-100 text-red-700 text-xs">
                     <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
@@ -522,11 +578,13 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
                   <Button
                     size="sm"
                     onClick={() => handleSave(true)}
-                    disabled={saving}
+                    disabled={saving || (scheduleEnabled && !scheduleDate)}
                     className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs h-9 gap-1.5"
                   >
                     {saving ? (
                       <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Saving...</>
+                    ) : scheduleEnabled ? (
+                      <><Calendar className="w-3.5 h-3.5" /> Schedule</>
                     ) : (
                       <><Play className="w-3.5 h-3.5" /> Launch now</>
                     )}
@@ -544,6 +602,7 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
 // ── main page ─────────────────────────────────────────────────────────────────
 
 export default function CampaignsPage() {
+  const { toast } = useToast();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -610,7 +669,7 @@ export default function CampaignsPage() {
         // Revert status back to draft since the send failed
         await supabase.from('campaigns').update({ status: 'draft', launched_at: null }).eq('id', c.id);
         setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, status: 'draft' as CampaignStatus, launched_at: null } : x));
-        alert(result.error ?? 'Campaign launch failed. Please try again.');
+        toast({ title: 'Campaign launch failed', description: result.error ?? 'Please try again.', variant: 'destructive' });
         return;
       }
       fetchData();

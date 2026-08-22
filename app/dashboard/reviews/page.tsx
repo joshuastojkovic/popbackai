@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   Star,
   Zap,
@@ -27,6 +28,31 @@ type ReviewStat = {
   sent: number;
   converted: number;
 };
+
+function StatCard({ icon: Icon, iconBg, iconColor, value, label, loading }: {
+  icon: React.ElementType;
+  iconBg: string;
+  iconColor: string;
+  value: string;
+  label: string;
+  loading: boolean;
+}) {
+  return (
+    <Card className="border-gray-100 shadow-sm">
+      <CardContent className="p-5">
+        <div className={`w-10 h-10 rounded-xl ${iconBg} flex items-center justify-center mb-3`}>
+          <Icon className={`w-5 h-5 ${iconColor}`} />
+        </div>
+        {loading ? (
+          <Skeleton className="h-7 w-16 mb-1" />
+        ) : (
+          <div className="text-2xl font-bold text-gray-900">{value}</div>
+        )}
+        <div className="text-sm text-gray-500">{label}</div>
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function ReviewBoosterPage() {
   const { profile, updateProfile } = useAuth();
@@ -115,33 +141,9 @@ export default function ReviewBoosterPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-4">
-        <Card className="border-gray-100 shadow-sm">
-          <CardContent className="p-5">
-            <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center mb-3">
-              <Send className="w-5 h-5 text-blue-600" />
-            </div>
-            <div className="text-2xl font-bold text-gray-900">{loading ? '—' : stats.sent}</div>
-            <div className="text-sm text-gray-500">Requests sent</div>
-          </CardContent>
-        </Card>
-        <Card className="border-gray-100 shadow-sm">
-          <CardContent className="p-5">
-            <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center mb-3">
-              <CheckCircle className="w-5 h-5 text-emerald-600" />
-            </div>
-            <div className="text-2xl font-bold text-gray-900">{loading ? '—' : stats.converted}</div>
-            <div className="text-sm text-gray-500">Reviews completed</div>
-          </CardContent>
-        </Card>
-        <Card className="border-gray-100 shadow-sm">
-          <CardContent className="p-5">
-            <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center mb-3">
-              <Star className="w-5 h-5 text-amber-600" />
-            </div>
-            <div className="text-2xl font-bold text-gray-900">{loading ? '—' : `${conversionRate}%`}</div>
-            <div className="text-sm text-gray-500">Conversion rate</div>
-          </CardContent>
-        </Card>
+        <StatCard icon={Send} iconBg="bg-blue-50" iconColor="text-blue-600" value={String(stats.sent)} label="Requests sent" loading={loading} />
+        <StatCard icon={CheckCircle} iconBg="bg-emerald-50" iconColor="text-emerald-600" value={String(stats.converted)} label="Reviews completed" loading={loading} />
+        <StatCard icon={Star} iconBg="bg-amber-50" iconColor="text-amber-600" value={`${conversionRate}%`} label="Conversion rate" loading={loading} />
       </div>
 
       {/* Google Review Link Setup */}

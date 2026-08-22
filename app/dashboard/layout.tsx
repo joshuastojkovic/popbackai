@@ -1,14 +1,16 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import Sidebar from '@/components/dashboard/Sidebar';
 import TopBar from '@/components/dashboard/TopBar';
+import OnboardingFlow from '@/components/dashboard/OnboardingFlow';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
 
   useEffect(() => {
     if (!loading && !user) {
@@ -28,6 +30,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   if (!user) return null;
+
+  // Show onboarding for new users who haven't completed it
+  if (profile && profile.onboarding_completed === false) {
+    return <OnboardingFlow />;
+  }
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
