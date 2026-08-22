@@ -48,6 +48,10 @@ import {
   Trash2,
   XCircle,
   Calendar,
+  Archive,
+  RotateCcw,
+  EyeOff,
+  Eye,
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
@@ -73,6 +77,7 @@ type Campaign = {
   created_at: string;
   launched_at: string | null;
   scheduled_for: string | null;
+  deleted_at: string | null;
 };
 
 type ClientRow = {
@@ -609,6 +614,7 @@ export default function CampaignsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [launchRec, setLaunchRec] = useState<AiRecommendation | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Campaign | null>(null);
+  const [showDeleted, setShowDeleted] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -629,7 +635,7 @@ export default function CampaignsPage() {
       supabase.from('campaigns').select('*').order('created_at', { ascending: false }),
       supabase.from('clients').select('id, last_visit_date'),
     ]);
-    if (!campaignRes.error && campaignRes.data) setCampaigns(campaignRes.data);
+    if (!campaignRes.error && campaignRes.data) setCampaigns(campaignRes.data as Campaign[]);
     if (!clientRes.error && clientRes.data) setClients(clientRes.data);
     setLoading(false);
   }, []);
@@ -642,9 +648,14 @@ export default function CampaignsPage() {
   };
 
   const handleDeleteCampaign = async (c: Campaign) => {
-    await supabase.from('campaigns').delete().eq('id', c.id);
-    setCampaigns(prev => prev.filter(x => x.id !== c.id));
+    await supabase.from('campaigns').update({ deleted_at: new Date().toISOString() }).eq('id', c.id);
+    setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, deleted_at: new Date().toISOString() } : x));
     setDeleteTarget(null);
+  };
+
+  const handleRestoreCampaign = async (c: Campaign) => {
+    await supabase.from('campaigns').update({ deleted_at: null }).eq('id', c.id);
+    setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, deleted_at: null } : x));
   };
 
   const handleStatusToggle = async (c: Campaign) => {
@@ -683,10 +694,13 @@ export default function CampaignsPage() {
   const recommendations = buildRecommendations(clients);
   const topRec = recommendations[0] ?? null;
 
-  const totalSent = campaigns.reduce((s, c) => s + c.sent, 0);
-  const totalOpened = campaigns.reduce((s, c) => s + c.opened, 0);
-  const totalConverted = campaigns.reduce((s, c) => s + c.converted, 0);
-  const activeCampaigns = campaigns.filter(c => c.status === 'active').length;
+  const visibleCampaigns = campaigns.filter(c => showDeleted ? true : !c.deleted_at);
+  const activeCampaignsList = campaigns.filter(c => !c.deleted_at);
+  const totalSent = activeCampaignsList.reduce((s, c) => s + c.sent, 0);
+  const totalOpened = activeCampaignsList.reduce((s, c) => s + c.opened, 0);
+  const totalConverted = activeCampaignsList.reduce((s, c) => s + c.converted, 0);
+  const activeCampaigns = activeCampaignsList.filter(c => c.status === 'active').length;
+  const deletedCount = campaigns.filter(c => c.deleted_at).length;
 
   const summaryStats = [
     { label: 'Active Campaigns', value: String(activeCampaigns), icon: Play },
@@ -749,13 +763,26 @@ export default function CampaignsPage() {
         </div>
       )}
 
+      {/* Show archived toggle */}
+      {deletedCount > 0 && !loading && (
+        <div className="flex items-center justify-end">
+          <button
+            onClick={() => setShowDeleted(!showDeleted)}
+            className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-800 transition-colors"
+          >
+            {showDeleted ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            {showDeleted ? 'Hide archived' : `Show archived (${deletedCount})`}
+          </button>
+        </div>
+      )}
+
       {/* Campaigns list */}
       {loading ? (
         <div className="flex flex-col items-center justify-center py-20 text-gray-400">
           <RefreshCw className="w-6 h-6 animate-spin mb-3 text-blue-400" />
           <p className="text-sm">Loading campaigns...</p>
         </div>
-      ) : campaigns.length === 0 ? (
+      ) : visibleCampaigns.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-center px-8">
           <div className="w-16 h-16 rounded-2xl bg-gray-100 flex items-center justify-center mb-4">
             <MessageSquare className="w-8 h-8 text-gray-300" />
@@ -774,8 +801,9 @@ export default function CampaignsPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          {campaigns.map((c) => {
+          {visibleCampaigns.map((c) => {
             const config = STATUS_CONFIG[c.status];
+            const isDeleted = !!c.deleted_at;
             const openRate = c.sent > 0 ? Math.round((c.opened / c.sent) * 100) : 0;
             const convRate = c.sent > 0 ? Math.round((c.converted / c.sent) * 100) : 0;
 
@@ -834,6 +862,17 @@ export default function CampaignsPage() {
 
                     {/* Actions */}
                     <div className="flex items-center gap-2 flex-shrink-0">
+                      {isDeleted ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleRestoreCampaign(c)}
+                          className="border-blue-200 text-blue-600 hover:bg-blue-50 h-8 text-xs"
+                        >
+                          <RotateCcw className="w-3 h-3 mr-1" /> Restore
+                        </Button>
+                      ) : (
+                      <>
                       {c.status === 'active' && (
                         <Button
                           variant="outline"
@@ -879,8 +918,10 @@ export default function CampaignsPage() {
                           onClick={() => setDeleteTarget(c)}
                           className="border-gray-200 text-gray-500 hover:text-red-600 hover:border-red-200 hover:bg-red-50 h-8 text-xs"
                         >
-                          <Trash2 className="w-3 h-3 mr-1" /> Delete
+                          <Archive className="w-3 h-3 mr-1" /> Archive
                         </Button>
+                      )}
+                      </>
                       )}
                     </div>
                   </div>
@@ -902,18 +943,18 @@ export default function CampaignsPage() {
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete campaign?</AlertDialogTitle>
+            <AlertDialogTitle>Archive campaign?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently remove "{deleteTarget?.name}" and all its stats from your history. This cannot be undone.
+              "{deleteTarget?.name}" will be moved to your archived campaigns. You can restore it anytime. Its data will still be included in your dashboard analytics.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => deleteTarget && handleDeleteCampaign(deleteTarget)}
-              className="bg-red-600 hover:bg-red-700 text-white"
+              className="bg-gray-900 hover:bg-gray-800 text-white"
             >
-              Delete
+              Archive
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

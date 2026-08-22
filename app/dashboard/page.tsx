@@ -90,10 +90,11 @@ export default function DashboardPage() {
         .lte('last_visit_date', cutoff60),
       supabase
         .from('campaigns')
-        .select('id, name, status, sent, opened, converted, created_at, launched_at'),
+        .select('id, name, status, sent, opened, converted, created_at, launched_at, deleted_at')
+        .is('deleted_at', null),
     ]);
 
-    const allCampaigns = campaignsRes.data ?? [];
+    const allCampaigns = (campaignsRes.data ?? []) as Array<{ id: string; name: string; status: string; sent: number; opened: number; converted: number; created_at: string; launched_at: string | null; deleted_at: string | null }>;
     const activeCampaigns = allCampaigns.filter(c => c.status === 'active').length;
     const totalReEngaged = allCampaigns.reduce((s, c) => s + (c.converted ?? 0), 0);
     const totalSent = allCampaigns.reduce((s, c) => s + (c.sent ?? 0), 0);
