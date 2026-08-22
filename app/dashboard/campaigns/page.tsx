@@ -287,7 +287,7 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
     const scheduledFor = scheduleEnabled && scheduleDate
       ? new Date(`${scheduleDate}T${scheduleTime}:00`).toISOString()
       : null;
-    const { data: inserted, error: err } = await supabase.from('campaigns').insert({
+    const campaignData = {
       user_id: session.user.id,
       name: name.trim(),
       status: launch ? 'active' : 'draft',
@@ -298,8 +298,9 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
       message_body: body.trim() || null,
       recipient_count: recipientCount,
       launched_at: launch ? new Date().toISOString() : null,
-      scheduled_for: scheduledFor,
-    }).select('id').single();
+      ...(scheduledFor ? { scheduled_for: scheduledFor } : {}),
+    };
+    const { data: inserted, error: err } = await supabase.from('campaigns').insert(campaignData).select('id').single();
 
     if (err || !inserted) {
       console.error('Campaign save failed:', err);
