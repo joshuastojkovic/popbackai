@@ -279,7 +279,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    console.log("Campaign sent:", { campaignId, sentCount, recipientRows: recipientRows.length, errors });
+    console.log("Campaign sent:", { campaignId, sentCount, recipientRows: recipientIds.length, errors });
 
     await supabase
       .from("campaigns")

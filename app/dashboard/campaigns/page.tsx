@@ -276,11 +276,19 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
     setSaving(true);
     setError('');
 
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user) {
+      setError('Your session has expired. Please sign in again.');
+      setSaving(false);
+      return;
+    }
+
     const segmentOption = SEGMENT_OPTIONS.find(s => s.value === segment);
     const scheduledFor = scheduleEnabled && scheduleDate
       ? new Date(`${scheduleDate}T${scheduleTime}:00`).toISOString()
       : null;
     const { data: inserted, error: err } = await supabase.from('campaigns').insert({
+      user_id: session.user.id,
       name: name.trim(),
       status: launch ? 'active' : 'draft',
       channel,
@@ -294,20 +302,20 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
     }).select('id').single();
 
     if (err || !inserted) {
-      setError('Could not save the campaign. Please try again.');
+      console.error('Campaign save failed:', err);
+      setError(err?.message ?? 'Could not save the campaign. Please try again.');
       setSaving(false);
       return;
     }
 
     if (launch) {
-      const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-campaign`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${session?.access_token}`,
+            Authorization: `Bearer ${session?.access_token ?? ''}`,
           },
           body: JSON.stringify({ campaignId: inserted.id }),
         }
@@ -670,7 +678,7 @@ export default function CampaignsPage() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${session?.access_token}`,
+            Authorization: `Bearer ${session?.access_token ?? ''}`,
           },
           body: JSON.stringify({ campaignId: c.id }),
         }
