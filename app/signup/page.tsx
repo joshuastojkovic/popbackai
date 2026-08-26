@@ -48,7 +48,7 @@ export default function SignupPage() {
     }
     setLoading(true);
     setError('');
-    const { error } = await signUp(form.email, form.password, form.fullName, form.businessName);
+    const { error } = await signUp(form.email, form.password, form.fullName, form.businessName, form.businessType);
     if (error) {
       setError(error.includes('already') ? 'An account with this email already exists.' : error);
       setLoading(false);

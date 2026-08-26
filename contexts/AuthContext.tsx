@@ -10,7 +10,7 @@ type AuthContextType = {
   profile: Profile | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
-  signUp: (email: string, password: string, fullName: string, businessName: string) => Promise<{ error: string | null }>;
+  signUp: (email: string, password: string, fullName: string, businessName: string, businessType: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
   updateProfile: (data: Partial<Profile>) => Promise<{ error: string | null }>;
 };
@@ -63,7 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: error?.message ?? null };
   };
 
-  const signUp = async (email: string, password: string, fullName: string, businessName: string) => {
+  const signUp = async (email: string, password: string, fullName: string, businessName: string, businessType: string) => {
     const { data, error } = await supabase.auth.signUp({ email, password });
     if (error) return { error: error.message };
     if (data.user) {
@@ -72,6 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         email,
         full_name: fullName,
         business_name: businessName,
+        business_type: businessType || null,
       });
     }
     return { error: null };

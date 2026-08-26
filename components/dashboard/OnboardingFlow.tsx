@@ -30,7 +30,7 @@ const steps = [
 export default function OnboardingFlow() {
   const router = useRouter();
   const { profile, updateProfile } = useAuth();
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(profile?.business_name ? 2 : 0);
   const [saving, setSaving] = useState(false);
 
   const [businessForm, setBusinessForm] = useState({
@@ -38,6 +38,17 @@ export default function OnboardingFlow() {
     business_type: profile?.business_type ?? '',
   });
   const [googleUrl, setGoogleUrl] = useState(profile?.google_review_url ?? '');
+
+  const goToImport = async () => {
+    setSaving(true);
+    await updateProfile({
+      ...businessForm,
+      google_review_url: googleUrl.trim() || null,
+      onboarding_completed: true,
+    });
+    setSaving(false);
+    router.push('/dashboard/clients');
+  };
 
   const handleComplete = async () => {
     setSaving(true);
@@ -193,10 +204,11 @@ export default function OnboardingFlow() {
                   Back
                 </Button>
                 <Button
-                  onClick={() => router.push('/dashboard/clients')}
+                  onClick={goToImport}
+                  disabled={saving}
                   className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold flex-1 gap-2"
                 >
-                  Go to import
+                  {saving ? 'Saving...' : 'Go to import'}
                   <ArrowRight className="w-4 h-4" />
                 </Button>
               </div>
