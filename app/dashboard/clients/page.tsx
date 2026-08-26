@@ -150,7 +150,7 @@ export default function ClientListPage() {
   const [duplicateCount, setDuplicateCount] = useState(0);
   const [importSuccess, setImportSuccess] = useState<{ count: number; duplicates: number } | null>(null);
   const [importError, setImportError] = useState('');
-  const [showUploadPanel, setShowUploadPanel] = useState(false);
+  const [importExpanded, setImportExpanded] = useState(true);
   const [fetchError, setFetchError] = useState('');
 
   // table state
@@ -298,7 +298,7 @@ export default function ClientListPage() {
     setImportSuccess({ count: totalInserted, duplicates: dups });
     setPendingClients([]);
     setParseResult(null);
-    setShowUploadPanel(false);
+    setImportExpanded(false);
     await fetchClients();
     setUploading(false);
   };
@@ -478,11 +478,12 @@ export default function ClientListPage() {
           </Button>
           <Button
             size="sm"
-            onClick={() => { setShowUploadPanel((v) => !v); setParseResult(null); setPendingClients([]); setDuplicateCount(0); }}
+            onClick={() => { setImportExpanded((v) => !v); setParseResult(null); setPendingClients([]); setDuplicateCount(0); }}
             className="bg-blue-600 hover:bg-blue-700 text-white font-semibold gap-1.5"
           >
             <Upload className="w-4 h-4" />
-            Import CSV
+            {importExpanded ? 'Hide import' : 'Import CSV'}
+            <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${importExpanded ? 'rotate-180' : ''}`} />
           </Button>
         </div>
       </div>
@@ -501,8 +502,9 @@ export default function ClientListPage() {
         </div>
       )}
 
-      {/* Upload panel */}
-      {showUploadPanel && (
+      {/* Import panel — always present, collapsible */}
+      <div className={`grid transition-all duration-300 ease-in-out ${importExpanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+        <div className="overflow-hidden">
         <Card className="border-blue-100 shadow-sm">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
@@ -512,9 +514,9 @@ export default function ClientListPage() {
                   Supports exports from Fresha, Square, and any standard CSV format
                 </p>
               </div>
-              <button onClick={() => { setShowUploadPanel(false); setParseResult(null); setPendingClients([]); setDuplicateCount(0); }}
+              <button onClick={() => { setImportExpanded(false); setParseResult(null); setPendingClients([]); setDuplicateCount(0); }}
                 className="text-gray-400 hover:text-gray-600">
-                <X className="w-4 h-4" />
+                <ChevronUp className="w-4 h-4" />
               </button>
             </div>
           </CardHeader>
@@ -639,7 +641,8 @@ export default function ClientListPage() {
             )}
           </CardContent>
         </Card>
-      )}
+        </div>
+      </div>
 
       {/* Fetch error banner */}
       {fetchError && (
@@ -705,7 +708,7 @@ export default function ClientListPage() {
               Import your first client list by uploading a CSV exported from Fresha, Square, or any booking platform.
             </p>
             <Button
-              onClick={() => setShowUploadPanel(true)}
+              onClick={() => { setImportExpanded(true); }}
               className="bg-blue-600 hover:bg-blue-700 text-white font-semibold gap-1.5"
               size="sm"
             >
