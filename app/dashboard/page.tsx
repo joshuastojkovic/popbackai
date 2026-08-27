@@ -98,7 +98,7 @@ export default function DashboardPage() {
     const activeCampaigns = allCampaigns.filter(c => c.status === 'active').length;
     const totalReEngaged = allCampaigns.reduce((s, c) => s + (c.converted ?? 0), 0);
     const totalSent = allCampaigns.reduce((s, c) => s + (c.sent ?? 0), 0);
-    const totalOpened = allCampaigns.reduce((s, c) => s + (c.opened ?? 0), 0);
+    const totalOpened = allCampaigns.reduce((s, c) => s + Math.min(c.opened ?? 0, c.sent ?? 0), 0);
 
     setStats({
       totalClients: clientsRes.count ?? 0,
@@ -119,7 +119,7 @@ export default function DashboardPage() {
         sent: c.sent ?? 0,
         opened: c.opened ?? 0,
         converted: c.converted ?? 0,
-        openRate: (c.sent ?? 0) > 0 ? Math.round(((c.opened ?? 0) / c.sent) * 100) : 0,
+        openRate: (c.sent ?? 0) > 0 ? Math.min(100, Math.round(((c.opened ?? 0) / c.sent) * 100)) : 0,
       }));
     setCampaignData(chartData);
 
@@ -149,7 +149,7 @@ export default function DashboardPage() {
   useEffect(() => { fetchStats(); }, [fetchStats]);
 
   const isEmpty = stats.totalClients === 0;
-  const overallOpenRate = stats.totalSent > 0 ? Math.round((stats.totalOpened / stats.totalSent) * 100) : 0;
+  const overallOpenRate = stats.totalSent > 0 ? Math.min(100, Math.round((stats.totalOpened / stats.totalSent) * 100)) : 0;
 
   const greeting = getGreeting();
 

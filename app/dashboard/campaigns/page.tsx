@@ -710,7 +710,7 @@ export default function CampaignsPage() {
   const visibleCampaigns = campaigns.filter(c => showDeleted ? true : !c.deleted_at);
   const activeCampaignsList = campaigns.filter(c => !c.deleted_at);
   const totalSent = activeCampaignsList.reduce((s, c) => s + c.sent, 0);
-  const totalOpened = activeCampaignsList.reduce((s, c) => s + c.opened, 0);
+  const totalOpened = activeCampaignsList.reduce((s, c) => s + Math.min(c.opened, c.sent), 0);
   const totalConverted = activeCampaignsList.reduce((s, c) => s + c.converted, 0);
   const activeCampaigns = activeCampaignsList.filter(c => c.status === 'active').length;
   const deletedCount = campaigns.filter(c => c.deleted_at).length;
@@ -817,8 +817,8 @@ export default function CampaignsPage() {
           {visibleCampaigns.map((c) => {
             const config = STATUS_CONFIG[c.status];
             const isDeleted = !!c.deleted_at;
-            const openRate = c.sent > 0 ? Math.round((c.opened / c.sent) * 100) : 0;
-            const convRate = c.sent > 0 ? Math.round((c.converted / c.sent) * 100) : 0;
+            const openRate = c.sent > 0 ? Math.min(100, Math.round((c.opened / c.sent) * 100)) : 0;
+            const convRate = c.sent > 0 ? Math.min(100, Math.round((c.converted / c.sent) * 100)) : 0;
 
             return (
               <Card key={c.id} className="border-gray-100 shadow-sm hover:shadow-md transition-shadow">
