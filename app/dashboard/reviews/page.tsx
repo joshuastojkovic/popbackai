@@ -6,9 +6,17 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
 import {
   Star,
   Zap,
@@ -21,12 +29,26 @@ import {
   RefreshCw,
   Link2,
   AlertCircle,
+  Sparkles,
+  ChevronRight,
+  Users,
+  Mail,
+  TrendingUp,
+  Edit3,
+  Target,
 } from 'lucide-react';
 import Link from 'next/link';
 
 type ReviewStat = {
   sent: number;
   converted: number;
+};
+
+type EligibleClient = {
+  id: string;
+  name: string;
+  email: string;
+  last_visit_date: string | null;
 };
 
 function StatCard({ icon: Icon, iconBg, iconColor, value, label, loading }: {
@@ -61,9 +83,8 @@ export default function ReviewBoosterPage() {
   const [saved, setSaved] = useState(false);
   const [stats, setStats] = useState<ReviewStat>({ sent: 0, converted: 0 });
   const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
-  const [sendResult, setSendResult] = useState<{ count: number; message: string } | null>(null);
-  const [sendError, setSendError] = useState('');
+  const [eligibleClients, setEligibleClients] = useState<EligibleClient[]>([]);
+  const [showLaunch, setShowLaunch] = useState(false);
 
   useEffect(() => {
     setGoogleUrl(profile?.google_review_url ?? '');
@@ -82,6 +103,17 @@ export default function ReviewBoosterPage() {
       .eq('review_completed', true);
 
     setStats({ sent: sentCount ?? 0, converted: convertedCount ?? 0 });
+
+    // Fetch eligible clients (visited in last 60 days, not yet asked)
+    const cutoff = new Date(Date.now() - 60 * 86400000).toISOString().split('T')[0];
+    const { data: eligible } = await supabase
+      .from('clients')
+      .select('id, name, email, last_visit_date')
+      .not('email', 'is', null)
+      .gte('last_visit_date', cutoff)
+      .eq('review_requested', false);
+
+    setEligibleClients((eligible ?? []) as EligibleClient[]);
     setLoading(false);
   }, []);
 
@@ -98,38 +130,10 @@ export default function ReviewBoosterPage() {
     }
   };
 
-  const handleSendRequests = async () => {
-    setSending(true);
-    setSendError('');
-    setSendResult(null);
+  const conversionRate = stats.sent > 0 ? Math.min(100, Math.round((stats.converted / stats.sent) * 100)) : 0;
 
-    const { data: { session } } = await supabase.auth.getSession();
-
-    const res = await fetch(
-      `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-campaign`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session?.access_token}`,
-        },
-        body: JSON.stringify({ reviewBooster: true }),
-      }
-    );
-
-    const result = await res.json();
-    setSending(false);
-
-    if (!res.ok) {
-      setSendError(result.error ?? 'Could not send review requests. Make sure your Google review link is saved first.');
-      return;
-    }
-
-    setSendResult({ count: result.sent ?? 0, message: result.message ?? `${result.sent ?? 0} review requests sent` });
-    fetchStats();
-  };
-
-  const conversionRate = stats.sent > 0 ? Math.round((stats.converted / stats.sent) * 100) : 0;
+  const businessName = profile?.business_name ?? 'your business';
+  const boosterSentTotal = profile?.review_booster_sent ?? stats.sent;
 
   return (
     <div className="p-6 lg:p-8 max-w-3xl space-y-6">
@@ -141,10 +145,34 @@ export default function ReviewBoosterPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-4">
-        <StatCard icon={Send} iconBg="bg-blue-50" iconColor="text-blue-600" value={String(stats.sent)} label="Requests sent" loading={loading} />
+        <StatCard icon={Send} iconBg="bg-blue-50" iconColor="text-blue-600" value={String(boosterSentTotal)} label="Requests sent" loading={loading} />
         <StatCard icon={CheckCircle} iconBg="bg-emerald-50" iconColor="text-emerald-600" value={String(stats.converted)} label="Reviews completed" loading={loading} />
         <StatCard icon={Star} iconBg="bg-amber-50" iconColor="text-amber-600" value={`${conversionRate}%`} label="Conversion rate" loading={loading} />
       </div>
+
+      {/* AI Recommendation Banner */}
+      {eligibleClients.length > 0 && (
+        <div className="bg-gradient-to-r from-amber-50 to-amber-100/50 border border-amber-100 rounded-2xl p-5 flex items-start gap-4">
+          <div className="w-10 h-10 rounded-xl bg-amber-500 flex items-center justify-center flex-shrink-0">
+            <Sparkles className="w-5 h-5 text-white" />
+          </div>
+          <div className="flex-1">
+            <div className="font-bold text-gray-900 text-sm mb-1">AI Recommendation</div>
+            <p className="text-sm text-gray-600">
+              You have <strong>{eligibleClients.length} clients</strong> who visited recently and haven&apos;t been asked for a review yet. A personalised request now — while their visit is fresh — is the highest-conversion moment for earning 5-star reviews.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => setShowLaunch(true)}
+            disabled={!googleUrl}
+            className="bg-amber-500 hover:bg-amber-600 text-white font-semibold flex-shrink-0 gap-1"
+          >
+            Launch now
+            <ChevronRight className="w-3.5 h-3.5" />
+          </Button>
+        </div>
+      )}
 
       {/* Google Review Link Setup */}
       <Card className="border-gray-100 shadow-sm">
@@ -167,7 +195,7 @@ export default function ReviewBoosterPage() {
               className="h-10 border-gray-200"
             />
             <p className="text-xs text-gray-400">
-              Find it: Google Business Profile &rarr; Home &rarr; "Get more reviews" &rarr; copy the link.
+              Find it: Google Business Profile &rarr; Home &rarr; &ldquo;Get more reviews&rdquo; &rarr; copy the link.
             </p>
           </div>
 
@@ -193,50 +221,6 @@ export default function ReviewBoosterPage() {
               </a>
             )}
           </div>
-        </CardContent>
-      </Card>
-
-      {/* Send Review Requests */}
-      <Card className="border-gray-100 shadow-sm">
-        <CardHeader>
-          <CardTitle className="text-base font-bold text-gray-900 flex items-center gap-2">
-            <Zap className="w-4 h-4 text-amber-500" />
-            Send Review Requests
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-gray-500 leading-relaxed">
-            Send a personalised review request email to all clients who have visited in the last 60 days but haven&apos;t been asked for a review yet. Each email includes your Google review link.
-          </p>
-
-          {!googleUrl && (
-            <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-100 text-amber-800 text-sm">
-              <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-              <span>Save your Google review link above before sending requests.</span>
-            </div>
-          )}
-
-          {sendResult && (
-            <div className="flex items-start gap-2 p-3 rounded-lg bg-emerald-50 border border-emerald-100 text-emerald-800 text-sm">
-              <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-              <span>{sendResult.message}</span>
-            </div>
-          )}
-
-          {sendError && (
-            <div className="flex items-start gap-2 p-3 rounded-lg bg-red-50 border border-red-100 text-red-700 text-sm">
-              <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-              <span>{sendError}</span>
-            </div>
-          )}
-
-          <Button
-            onClick={handleSendRequests}
-            disabled={sending || !googleUrl}
-            className="bg-amber-500 hover:bg-amber-600 text-white font-semibold gap-2"
-          >
-            {sending ? <><RefreshCw className="w-4 h-4 animate-spin" /> Sending...</> : <><Send className="w-4 h-4" /> Send review requests</>}
-          </Button>
         </CardContent>
       </Card>
 
@@ -280,6 +264,185 @@ export default function ReviewBoosterPage() {
           Launch a win-back campaign <ArrowRight className="w-3 h-3" />
         </Link>
       </p>
+
+      {/* Launch modal */}
+      <ReviewLaunchModal
+        open={showLaunch}
+        onClose={() => setShowLaunch(false)}
+        onSent={() => { fetchStats(); setShowLaunch(false); }}
+        eligibleCount={eligibleClients.length}
+        businessName={businessName}
+        googleUrl={googleUrl}
+        savedSubject={profile?.review_email_subject ?? null}
+        savedBody={profile?.review_email_body ?? null}
+      />
     </div>
+  );
+}
+
+// ── Launch modal with AI suggestion + editable email ──────────────────────────
+
+type LaunchModalProps = {
+  open: boolean;
+  onClose: () => void;
+  onSent: () => void;
+  eligibleCount: number;
+  businessName: string;
+  googleUrl: string;
+  savedSubject: string | null;
+  savedBody: string | null;
+};
+
+function ReviewLaunchModal({ open, onClose, onSent, eligibleCount, businessName, googleUrl, savedSubject, savedBody }: LaunchModalProps) {
+  const defaultSubject = `How was your visit to ${businessName}?`;
+  const defaultBody =
+    `Hi [Name],\n\nThank you for visiting ${businessName} recently. We'd love to hear about your experience!\n\n` +
+    `If you enjoyed your visit, could you take 30 seconds to leave us a Google review? It really helps us grow:\n` +
+    `${googleUrl}\n\n` +
+    `If something wasn't right, just reply to this email and we'll make it right.\n\n` +
+    `Thank you,\n${businessName}`;
+
+  const [subject, setSubject] = useState(savedSubject ?? defaultSubject);
+  const [body, setBody] = useState(savedBody ?? defaultBody);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState<{ count: number; message: string } | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setSubject(savedSubject ?? defaultSubject);
+      setBody(savedBody ?? defaultBody);
+      setError('');
+      setSuccess(null);
+    }
+  }, [open, savedSubject, savedBody, defaultSubject, defaultBody]);
+
+  const handleSend = async () => {
+    setSending(true);
+    setError('');
+    setSuccess(null);
+
+    const { data: { session } } = await supabase.auth.getSession();
+
+    const res = await fetch(
+      `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-campaign`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.access_token ?? ''}`,
+        },
+        body: JSON.stringify({ reviewBooster: true, subject, body }),
+      }
+    );
+
+    const result = await res.json();
+    setSending(false);
+
+    if (!res.ok) {
+      setError(result.error ?? 'Could not send review requests. Please try again.');
+      return;
+    }
+
+    setSuccess({ count: result.sent ?? 0, message: result.message ?? `${result.sent ?? 0} review requests sent` });
+    setTimeout(() => onSent(), 1500);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto p-0">
+        <DialogHeader className="px-6 pt-6 pb-0">
+          <DialogTitle className="text-lg font-bold text-gray-900">Launch Review Booster</DialogTitle>
+          <DialogDescription className="text-sm text-gray-500 mt-0.5">
+            Review the AI-suggested email below, edit anything you like, then send to your eligible clients.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="px-6 pb-6 pt-4 space-y-4">
+          {/* AI pre-fill banner */}
+          <div className="flex items-start gap-3 p-3.5 rounded-xl bg-amber-50 border border-amber-100">
+            <Sparkles className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-xs text-amber-800 font-medium">
+                AI drafted this review request for you — feel free to edit the subject or message before sending.
+              </p>
+            </div>
+          </div>
+
+          {/* Recipient summary */}
+          <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-lg bg-emerald-50 border border-emerald-100 text-sm">
+            <Target className="w-4 h-4 flex-shrink-0 text-emerald-600" />
+            <span className="text-emerald-800 font-medium">
+              <strong>{eligibleCount}</strong> eligible clients will receive this request
+            </span>
+          </div>
+
+          {/* Subject */}
+          <div>
+            <Label className="text-xs font-semibold text-gray-700 mb-1.5 block">Email Subject</Label>
+            <Input
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              className="h-10 border-gray-200"
+            />
+          </div>
+
+          {/* Body */}
+          <div>
+            <Label className="text-xs font-semibold text-gray-700 mb-1.5 block">Email Body</Label>
+            <Textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              rows={10}
+              className="border-gray-200 resize-none text-sm"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Use <code className="text-gray-600">[Name]</code> to personalise with each client&apos;s name. Your Google review link is included automatically.
+            </p>
+          </div>
+
+          {/* Error */}
+          {error && (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-100 text-red-700 text-xs">
+              <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+              {error}
+            </div>
+          )}
+
+          {/* Success */}
+          {success && (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-emerald-50 border border-emerald-100 text-emerald-800 text-sm">
+              <CheckCircle className="w-4 h-4 flex-shrink-0" />
+              {success.message}
+            </div>
+          )}
+
+          {/* Footer */}
+          <div className="flex items-center justify-between pt-4 border-t border-gray-100">
+            <div className="flex items-center gap-4 text-xs text-gray-400">
+              <span className="flex items-center gap-1"><Users className="w-3 h-3" /> {eligibleCount} recipients</span>
+              <span className="flex items-center gap-1"><Mail className="w-3 h-3" /> Email</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={onClose} className="border-gray-200 text-gray-700 text-xs h-9">
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleSend}
+                disabled={sending || eligibleCount === 0}
+                className="bg-amber-500 hover:bg-amber-600 text-white font-semibold text-xs h-9 gap-1.5"
+              >
+                {sending ? (
+                  <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Sending...</>
+                ) : (
+                  <><Send className="w-3.5 h-3.5" /> Send to {eligibleCount} clients</>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

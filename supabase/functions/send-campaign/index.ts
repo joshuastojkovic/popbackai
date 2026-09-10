@@ -41,7 +41,7 @@ Deno.serve(async (req: Request) => {
 
       const { data: profile } = await supabase
         .from("profiles")
-        .select("google_review_url, business_name")
+        .select("google_review_url, business_name, review_email_subject, review_email_body")
         .eq("id", user.id)
         .maybeSingle();
 
@@ -51,6 +51,20 @@ Deno.serve(async (req: Request) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
+
+      // Allow the caller to override the subject/body for this send,
+      // otherwise fall back to the saved template, then to a sensible default.
+      const businessName = profile.business_name ?? "us";
+      const defaultSubject = `How was your visit to ${businessName}?`;
+      const defaultBody =
+        `Hi [Name],\n\nThank you for visiting ${businessName} recently. We'd love to hear about your experience!\n\n` +
+        `If you enjoyed your visit, could you take 30 seconds to leave us a Google review? It really helps us grow:\n` +
+        `${profile.google_review_url}\n\n` +
+        `If something wasn't right, just reply to this email and we'll make it right.\n\n` +
+        `Thank you,\n${businessName}`;
+
+      const subject = (body.subject ?? profile.review_email_subject ?? defaultSubject).trim();
+      const templateBody = (body.body ?? profile.review_email_body ?? defaultBody).trim();
 
       // Fetch active clients (visited within 60 days) who haven't been asked for a review yet
       const cutoff = new Date(Date.now() - 60 * 86400000).toISOString().split("T")[0];
@@ -76,19 +90,18 @@ Deno.serve(async (req: Request) => {
       }
 
       const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
-      const businessName = profile.business_name ?? "us";
       let sentCount = 0;
       const errors: string[] = [];
       const sentIds: string[] = [];
 
       for (const client of emailClients) {
-        const subject = `How was your visit to ${businessName}?`;
-        const textBody = `Hi ${client.name},\n\nThank you for visiting ${businessName} recently. We'd love to hear about your experience!\n\nIf you enjoyed your visit, could you take 30 seconds to leave us a Google review? It really helps us grow:\n${profile.google_review_url}\n\nIf something wasn't right, just reply to this email and we'll make it right.\n\nThank you,\n${businessName}`;
+        const personalisedSubject = subject.replace(/\[Name\]/g, client.name ?? "there");
+        const textBody = templateBody.replace(/\[Name\]/g, client.name ?? "there");
 
         const emailPayload = {
           from: "hello@popbackai.com",
           to: client.email,
-          subject,
+          subject: personalisedSubject,
           text: textBody,
           html: textBody.replace(/\n/g, "<br>"),
         };
@@ -111,12 +124,22 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      // Mark clients as review_requested
+      // Mark clients as review_requested and update booster counter
       if (sentIds.length > 0) {
         await supabase
           .from("clients")
           .update({ review_requested: true, review_requested_at: new Date().toISOString() })
           .in("id", sentIds);
+
+        await supabase
+          .from("profiles")
+          .update({
+            review_email_subject: subject,
+            review_email_body: templateBody,
+            review_booster_sent: (profile.review_booster_sent ?? 0) + sentIds.length,
+            review_booster_last_sent_at: new Date().toISOString(),
+          })
+          .eq("id", user.id);
       }
 
       return new Response(
