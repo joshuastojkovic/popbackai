@@ -193,7 +193,7 @@ Deno.serve(async (req: Request) => {
 
     let query = supabase
       .from("clients")
-      .select("id, name, email")
+      .select("id, name, email, preferred_service, preferred_staff, last_visit_date")
       .not("email", "is", null)
       .lte("last_visit_date", cutoff);
 
@@ -261,7 +261,26 @@ Deno.serve(async (req: Request) => {
     for (let i = 0; i < emailClients.length; i++) {
       const client = emailClients[i];
       const recipientId = recipientIds[i];
-      const personalised = (campaign.message_body ?? "").replace(/\[Name\]/g, client.name ?? "there");
+
+      const firstName = (client.name ?? "there").split(" ")[0];
+      const daysSince = client.last_visit_date
+        ? Math.floor((Date.now() - new Date(client.last_visit_date).getTime()) / 86400000)
+        : null;
+
+      let personalised = (campaign.message_body ?? "")
+        .replace(/\{\{first_name\}\}/g, firstName)
+        .replace(/\{\{last_service\}\}/g, client.preferred_service ?? "your appointment")
+        .replace(/\{\{favorite_barber\}\}/g, client.preferred_staff ?? "our team")
+        .replace(/\{\{days_since_visit\}\}/g, daysSince !== null ? String(daysSince) : "a while")
+        .replace(/\[Name\]/g, firstName);
+
+      let personalisedSubject = (campaign.message_subject ?? "A message from us")
+        .replace(/\{\{first_name\}\}/g, firstName)
+        .replace(/\{\{last_service\}\}/g, client.preferred_service ?? "your appointment")
+        .replace(/\{\{favorite_barber\}\}/g, client.preferred_staff ?? "our team")
+        .replace(/\{\{days_since_visit\}\}/g, daysSince !== null ? String(daysSince) : "a while")
+        .replace(/\[Name\]/g, firstName);
+
       const unsubscribeUrl = `${appUrl}/unsubscribe?token=${recipientId}`;
 
       const textBody = personalised + `\n\n---\nDon't want these emails? Unsubscribe: ${unsubscribeUrl}`;
@@ -272,7 +291,7 @@ Deno.serve(async (req: Request) => {
       const emailPayload = {
         from: "hello@popbackai.com",
         to: client.email,
-        subject: campaign.message_subject ?? "A message from us",
+        subject: personalisedSubject,
         text: textBody,
         html: htmlBody,
       };
