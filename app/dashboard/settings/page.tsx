@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
+import { Badge } from '@/components/ui/badge';
 import {
   User,
   Building2,
@@ -21,6 +22,13 @@ import {
   Eye,
   EyeOff,
   Trash2,
+  Plug,
+  Webhook,
+  Zap,
+  FileText,
+  ExternalLink,
+  Mail,
+  MessageSquare,
 } from 'lucide-react';
 import {
   AlertDialog,
@@ -40,9 +48,10 @@ const BUSINESS_TYPES = [
 ];
 
 const tabs = [
-  { id: 'profile',  label: 'Profile',  icon: User },
-  { id: 'business', label: 'Business', icon: Building2 },
-  { id: 'security', label: 'Security', icon: Shield },
+  { id: 'profile',      label: 'Profile',      icon: User },
+  { id: 'business',     label: 'Business',    icon: Building2 },
+  { id: 'integrations', label: 'Integrations', icon: Plug },
+  { id: 'security',    label: 'Security',    icon: Shield },
   { id: 'notifications', label: 'Notifications', icon: Bell },
 ];
 
@@ -65,6 +74,7 @@ export default function SettingsPage() {
   const [businessForm, setBusinessForm] = useState({
     business_name: profile?.business_name ?? '',
     business_type: profile?.business_type ?? '',
+    pos_source: profile?.pos_source ?? '',
   });
 
   const [notifForm, setNotifForm] = useState({
@@ -284,6 +294,26 @@ export default function SettingsPage() {
                       </SelectContent>
                     </Select>
                   </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-gray-700 font-medium text-sm">POS / Booking system</Label>
+                    <Select
+                      value={businessForm.pos_source}
+                      onValueChange={(v) => setBusinessForm((p) => ({ ...p, pos_source: v }))}
+                    >
+                      <SelectTrigger className="h-10 border-gray-200">
+                        <SelectValue placeholder="Select your POS system" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="booksy">Booksy</SelectItem>
+                        <SelectItem value="mindbody">Mindbody</SelectItem>
+                        <SelectItem value="phorest">Phorest</SelectItem>
+                        <SelectItem value="fresha">Fresha</SelectItem>
+                        <SelectItem value="square">Square</SelectItem>
+                        <SelectItem value="other">Other</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-gray-400">PopbackAI works alongside your existing POS — no switching required.</p>
+                  </div>
                 </div>
 
                 <div className="pt-2">
@@ -298,6 +328,58 @@ export default function SettingsPage() {
                 </div>
               </CardContent>
             </Card>
+          )}
+
+          {activeTab === 'integrations' && (
+            <div className="space-y-6">
+              <Card className="border-gray-100 shadow-sm">
+                <CardHeader>
+                  <CardTitle className="text-base font-bold text-gray-900">Connected Integrations</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {[
+                    { name: 'Webhooks', icon: Webhook, desc: 'Send campaign events to your own server or automation tools', status: 'Available' },
+                    { name: 'Zapier', icon: Zap, desc: 'Connect to 5,000+ apps — trigger workflows when campaigns are sent', status: 'Available' },
+                    { name: 'Klaviyo', icon: Mail, desc: 'Export campaign scripts directly to your Klaviyo email flows', status: 'Available' },
+                    { name: 'Twilio', icon: MessageSquare, desc: 'Send SMS campaigns through your Twilio account', status: 'Available' },
+                  ].map((integration) => (
+                    <div key={integration.name} className="flex items-center gap-4 p-4 rounded-xl border border-gray-100">
+                      <div className="w-10 h-10 rounded-lg bg-gray-50 flex items-center justify-center flex-shrink-0">
+                        <integration.icon className="w-5 h-5 text-gray-600" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-semibold text-gray-900">{integration.name}</div>
+                        <p className="text-xs text-gray-400 mt-0.5">{integration.desc}</p>
+                      </div>
+                      <Badge className="bg-blue-50 text-blue-700 border border-blue-100 text-xs font-semibold">{integration.status}</Badge>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+
+              <Card className="border-gray-100 shadow-sm">
+                <CardHeader>
+                  <CardTitle className="text-base font-bold text-gray-900">CSV Export Guides</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <p className="text-sm text-gray-500">Learn how to export your client data from your POS system and import it into PopbackAI.</p>
+                  {[
+                    { name: 'Booksy', steps: 'Settings → Data Export → Export Client List (CSV)' },
+                    { name: 'Mindbody', steps: 'Reports → Clients → Export (CSV)' },
+                    { name: 'Phorest', steps: 'Manager → Reports → Client Export (CSV)' },
+                    { name: 'Fresha', steps: 'Settings → Data Export → Export Clients (CSV)' },
+                  ].map((guide) => (
+                    <div key={guide.name} className="flex items-start gap-3 p-3 rounded-lg bg-gray-50 border border-gray-100">
+                      <FileText className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <div className="text-sm font-semibold text-gray-800">{guide.name}</div>
+                        <div className="text-xs text-gray-500 mt-0.5 font-mono">{guide.steps}</div>
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            </div>
           )}
 
           {activeTab === 'security' && (

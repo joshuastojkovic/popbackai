@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
-import { parseCSV, clientStatus, daysSinceVisit, ParsedClient, ParseResult } from '@/lib/csvParser';
+import { parseCSV, clientStatus, daysSinceVisit, ParsedClient, ParseResult, CHURN_TIER_CONFIG, ChurnTier } from '@/lib/csvParser';
 import CSVDropZone from '@/components/dashboard/CSVDropZone';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -60,6 +60,10 @@ type Client = {
   notes: string | null;
   review_requested: boolean;
   review_completed: boolean;
+  lifetime_spend: number | null;
+  preferred_service: string | null;
+  preferred_staff: string | null;
+  churn_tier: string | null;
   created_at: string;
 };
 
@@ -74,7 +78,7 @@ type CampaignRecipient = {
 
 type SortField = 'name' | 'last_visit_date' | 'status';
 type SortDir = 'asc' | 'desc';
-type StatusFilter = 'all' | 'active' | 'lapsed' | 'unknown';
+type StatusFilter = 'all' | 'active' | 'lapsed' | 'unknown' | 'at_risk' | 'high_value' | 'lost';
 
 const PAGE_SIZE = 25;
 
@@ -194,6 +198,15 @@ export default function ClientListPage() {
       } else if (statusFilter === 'unknown') {
         countQuery = countQuery.is('last_visit_date', null);
         dataQuery = dataQuery.is('last_visit_date', null);
+      } else if (statusFilter === 'at_risk') {
+        countQuery = countQuery.in('churn_tier', ['slipping_away', 'high_value_at_risk', 'lapsed']);
+        dataQuery = dataQuery.in('churn_tier', ['slipping_away', 'high_value_at_risk', 'lapsed']);
+      } else if (statusFilter === 'high_value') {
+        countQuery = countQuery.eq('churn_tier', 'high_value_at_risk');
+        dataQuery = dataQuery.eq('churn_tier', 'high_value_at_risk');
+      } else if (statusFilter === 'lost') {
+        countQuery = countQuery.eq('churn_tier', 'lost');
+        dataQuery = dataQuery.eq('churn_tier', 'lost');
       }
     }
 
@@ -280,6 +293,9 @@ export default function ClientListPage() {
       email: c.email || null,
       phone: c.phone || null,
       last_visit_date: c.last_visit_date || null,
+      lifetime_spend: c.lifetime_spend ?? 0,
+      preferred_service: c.preferred_service || null,
+      preferred_staff: c.preferred_staff || null,
       source: 'csv',
     }));
 
@@ -655,10 +671,13 @@ export default function ClientListPage() {
       {/* Status filter pills */}
       <div className="flex flex-wrap gap-2">
         {([
-          { key: 'all',     label: 'All clients',   icon: Users,      count: totalCount },
-          { key: 'active',  label: 'Active',         icon: UserCheck  },
-          { key: 'lapsed',  label: 'Lapsed',         icon: UserX      },
-          { key: 'unknown', label: 'No visit date',  icon: HelpCircle },
+          { key: 'all',       label: 'All clients',     icon: Users,      count: totalCount },
+          { key: 'active',     label: 'Active',           icon: UserCheck  },
+          { key: 'at_risk',    label: 'At-Risk',          icon: AlertTriangle },
+          { key: 'high_value', label: 'High-Value Risk', icon: Star       },
+          { key: 'lapsed',     label: 'Lapsed',           icon: UserX      },
+          { key: 'lost',       label: 'Lost',             icon: UserX      },
+          { key: 'unknown',   label: 'No visit date',    icon: HelpCircle },
         ] as const).map(({ key, label, icon: Icon }) => (
           <button
             key={key}
@@ -837,6 +856,11 @@ export default function ClientListPage() {
                           <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot} mr-1.5 inline-block`} />
                           {cfg.label}
                         </Badge>
+                        {client.lifetime_spend != null && client.lifetime_spend > 0 && (
+                          <div className="text-xs text-emerald-600 font-semibold mt-1">
+                            £{client.lifetime_spend.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-3.5 hidden sm:table-cell">
                         <span className="text-xs text-gray-400 capitalize">{client.source ?? 'csv'}</span>

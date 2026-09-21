@@ -16,11 +16,13 @@ import {
   ChevronRight,
   Menu,
   X,
+  Brain,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/dashboard/consultant', label: 'AI Consultant', icon: Brain },
   { href: '/dashboard/clients', label: 'Client List', icon: Users },
   { href: '/dashboard/campaigns', label: 'Win-Back Campaigns', icon: Repeat },
   { href: '/dashboard/reviews', label: 'Review Booster', icon: Star },

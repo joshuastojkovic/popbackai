@@ -4,8 +4,9 @@ import { usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 
 const pageTitles: Record<string, { title: string; subtitle: string }> = {
-  '/dashboard': { title: 'Dashboard', subtitle: 'Overview of your business' },
-  '/dashboard/clients': { title: 'Client List', subtitle: 'Manage and view all your clients' },
+  '/dashboard': { title: 'Dashboard', subtitle: 'AI retention overview' },
+  '/dashboard/consultant': { title: 'AI Consultant', subtitle: 'Your AI-powered retention strategist' },
+  '/dashboard/clients': { title: 'Client List', subtitle: 'Manage and analyze all your clients' },
   '/dashboard/campaigns': { title: 'Win-Back Campaigns', subtitle: 'Re-engage lapsed clients' },
   '/dashboard/reviews': { title: 'Review Booster', subtitle: 'Grow your online reputation' },
   '/dashboard/settings': { title: 'Settings', subtitle: 'Manage your account and preferences' },
