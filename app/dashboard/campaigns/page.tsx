@@ -41,6 +41,7 @@ import {
   Clock,
   RefreshCw,
   X,
+  Check,
   CheckCircle,
   Sparkles,
   Target,
@@ -90,6 +91,7 @@ type AiRecommendation = {
   segment: Segment;
   label: string;
   clientCount: number;
+  contactedCount: number;
   estimatedRevenue: string;
   urgency: 'high' | 'medium' | 'low';
   reason: string;
@@ -117,15 +119,22 @@ const STATUS_CONFIG: Record<CampaignStatus, { label: string; color: string; bg: 
 
 // ── AI recommendation engine (rule-based on real client data) ─────────────────
 
-function buildRecommendations(clients: ClientRow[]): AiRecommendation[] {
+function buildRecommendations(clients: ClientRow[], excludeClientIds?: Set<string>): AiRecommendation[] {
+  const exclude = excludeClientIds ?? new Set<string>();
   const now = Date.now();
   const daysSince = (iso: string | null) =>
     iso ? Math.floor((now - new Date(iso).getTime()) / 86400000) : null;
 
-  const lapsed60  = clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 60 && d < 90; });
-  const lapsed90  = clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 90 && d < 180; });
-  const lapsed180 = clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 180 && d < 365; });
-  const lapsed365 = clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 365; });
+  const lapsed60  = clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 60 && d < 90 && !exclude.has(c.id); });
+  const lapsed90  = clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 90 && d < 180 && !exclude.has(c.id); });
+  const lapsed180 = clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 180 && d < 365 && !exclude.has(c.id); });
+  const lapsed365 = clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 365 && !exclude.has(c.id); });
+
+  // Count contacted clients per segment for display
+  const contacted60  = clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 60 && d < 90 && exclude.has(c.id); }).length;
+  const contacted90  = clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 90 && d < 180 && exclude.has(c.id); }).length;
+  const contacted180 = clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 180 && d < 365 && exclude.has(c.id); }).length;
+  const contacted365 = clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 365 && exclude.has(c.id); }).length;
 
   const avgRevPerClient = 65;
   const recs: AiRecommendation[] = [];
@@ -135,6 +144,7 @@ function buildRecommendations(clients: ClientRow[]): AiRecommendation[] {
       segment: 'lapsed_90',
       label: '3-Month Lapsed Win-Back',
       clientCount: lapsed90.length,
+      contactedCount: contacted90,
       estimatedRevenue: `£${(lapsed90.length * avgRevPerClient * 0.28).toFixed(0)}`,
       urgency: 'high',
       reason: `${lapsed90.length} clients haven't been in for 3–6 months — the sweet spot where a timely offer is most likely to bring them back.`,
@@ -148,6 +158,7 @@ function buildRecommendations(clients: ClientRow[]): AiRecommendation[] {
       segment: 'lapsed_180',
       label: '6-Month Re-engagement',
       clientCount: lapsed180.length,
+      contactedCount: contacted180,
       estimatedRevenue: `£${(lapsed180.length * avgRevPerClient * 0.18).toFixed(0)}`,
       urgency: 'medium',
       reason: `${lapsed180.length} clients are 6–12 months lapsed. A stronger incentive like a discount will be needed to re-engage them.`,
@@ -161,6 +172,7 @@ function buildRecommendations(clients: ClientRow[]): AiRecommendation[] {
       segment: 'lapsed_60',
       label: 'Early Lapse Nudge',
       clientCount: lapsed60.length,
+      contactedCount: contacted60,
       estimatedRevenue: `£${(lapsed60.length * avgRevPerClient * 0.35).toFixed(0)}`,
       urgency: 'high',
       reason: `${lapsed60.length} clients are just 2–3 months overdue — a gentle reminder now is the highest-conversion opportunity.`,
@@ -174,6 +186,7 @@ function buildRecommendations(clients: ClientRow[]): AiRecommendation[] {
       segment: 'lapsed_365',
       label: '12-Month Recovery Campaign',
       clientCount: lapsed365.length,
+      contactedCount: contacted365,
       estimatedRevenue: `£${(lapsed365.length * avgRevPerClient * 0.10).toFixed(0)}`,
       urgency: 'low',
       reason: `${lapsed365.length} clients haven't visited in over a year. A bold win-back offer is the best chance to recover these relationships.`,
@@ -188,17 +201,18 @@ function buildRecommendations(clients: ClientRow[]): AiRecommendation[] {
   });
 }
 
-function segmentClientCount(clients: ClientRow[], segment: Segment): number {
+function segmentClientCount(clients: ClientRow[], segment: Segment, excludeClientIds?: Set<string>): number {
+  const exclude = excludeClientIds ?? new Set<string>();
   const now = Date.now();
   const daysSince = (iso: string | null) =>
     iso ? Math.floor((now - new Date(iso).getTime()) / 86400000) : null;
 
   switch (segment) {
-    case 'lapsed_60':  return clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 60 && d < 90; }).length;
-    case 'lapsed_90':  return clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 90 && d < 180; }).length;
-    case 'lapsed_180': return clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 180 && d < 365; }).length;
-    case 'lapsed_365': return clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 365; }).length;
-    case 'all_lapsed': return clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 60; }).length;
+    case 'lapsed_60':  return clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 60 && d < 90 && !exclude.has(c.id); }).length;
+    case 'lapsed_90':  return clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 90 && d < 180 && !exclude.has(c.id); }).length;
+    case 'lapsed_180': return clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 180 && d < 365 && !exclude.has(c.id); }).length;
+    case 'lapsed_365': return clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 365 && !exclude.has(c.id); }).length;
+    case 'all_lapsed': return clients.filter(c => { const d = daysSince(c.last_visit_date); return d !== null && d >= 60 && !exclude.has(c.id); }).length;
   }
 }
 
@@ -217,12 +231,13 @@ type CreateModalProps = {
   onCreated: () => void;
   clients: ClientRow[];
   initialRec?: AiRecommendation | null;
+  excludeClientIds?: Set<string>;
 };
 
-function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: CreateModalProps) {
+function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec, excludeClientIds }: CreateModalProps) {
   const [step, setStep] = useState<'ai' | 'form'>(initialRec ? 'form' : 'ai');
   const [selectedRec, setSelectedRec] = useState<AiRecommendation | null>(initialRec ?? null);
-  const recommendations = buildRecommendations(clients);
+  const recommendations = buildRecommendations(clients, excludeClientIds);
 
   const [name, setName] = useState('');
   const [channel, setChannel] = useState<Channel>('email');
@@ -260,7 +275,7 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
     }
   }, [selectedRec]);
 
-  const recipientCount = segmentClientCount(clients, segment);
+  const recipientCount = segmentClientCount(clients, segment, excludeClientIds);
 
   const handleSelectRec = (rec: AiRecommendation) => {
     setSelectedRec(rec);
@@ -391,6 +406,12 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
                               <span className="text-xs font-semibold text-gray-700">
                                 <span className="text-blue-600">{rec.clientCount}</span> clients
                               </span>
+                              {rec.contactedCount > 0 && (
+                                <span className="text-xs font-semibold text-emerald-600 flex items-center gap-1">
+                                  <Check className="w-3 h-3" />
+                                  {rec.contactedCount} already contacted
+                                </span>
+                              )}
                               <span className="text-xs font-semibold text-emerald-700">
                                 ~{rec.estimatedRevenue} estimated
                               </span>
@@ -620,7 +641,7 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
 
 export default function CampaignsPage() {
   const { toast } = useToast();
-  const { campaigns: contextCampaigns, refreshCampaigns, refreshClients } = useClientData();
+  const { campaigns: contextCampaigns, refreshCampaigns, refreshClients, contactedClientIds } = useClientData();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -724,7 +745,7 @@ export default function CampaignsPage() {
     refreshCampaigns();
   };
 
-  const recommendations = buildRecommendations(clients);
+  const recommendations = buildRecommendations(clients, contactedClientIds);
   const topRec = recommendations[0] ?? null;
 
   const visibleCampaigns = campaigns.filter(c => showDeleted ? true : !c.deleted_at);
@@ -784,6 +805,12 @@ export default function CampaignsPage() {
           <div className="flex-1">
             <div className="font-bold text-gray-900 text-sm mb-1">AI Recommendation</div>
             <p className="text-sm text-gray-600">{topRec.reason} A targeted campaign could recover approximately <strong>{topRec.estimatedRevenue}</strong>.</p>
+            {topRec.contactedCount > 0 && (
+              <p className="text-xs text-emerald-600 mt-1 flex items-center gap-1">
+                <Check className="w-3 h-3" />
+                {topRec.contactedCount} clients in this segment already contacted — excluded from this recommendation.
+              </p>
+            )}
           </div>
           <Button
             size="sm"
@@ -793,6 +820,19 @@ export default function CampaignsPage() {
             Launch now
             <ChevronRight className="w-3.5 h-3.5" />
           </Button>
+        </div>
+      )}
+
+      {/* All caught up banner — when no recommendations remain */}
+      {!topRec && !loading && clients.length > 0 && (
+        <div className="bg-gradient-to-r from-emerald-50 to-green-50 border border-emerald-100 rounded-2xl p-5 flex items-start gap-4">
+          <div className="w-10 h-10 rounded-xl bg-emerald-600 flex items-center justify-center flex-shrink-0">
+            <CheckCircle className="w-5 h-5 text-white" />
+          </div>
+          <div className="flex-1">
+            <div className="font-bold text-gray-900 text-sm mb-1">All at-risk clients contacted</div>
+            <p className="text-sm text-gray-600">You've reached out to every lapsed client segment. New recommendations will appear as more clients lapse over time — check back after a few weeks.</p>
+          </div>
         </div>
       )}
 
@@ -971,6 +1011,7 @@ export default function CampaignsPage() {
         onCreated={fetchData}
         clients={clients}
         initialRec={launchRec}
+        excludeClientIds={contactedClientIds}
       />
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>

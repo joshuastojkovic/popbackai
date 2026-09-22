@@ -28,6 +28,7 @@ export type AiStrategy = {
   title: string;
   priority: 'high' | 'medium' | 'low';
   clientCount: number;
+  contactedCount: number;
   estimatedRevenue: string;
   insight: string;
   recommendation: string;
@@ -97,9 +98,23 @@ export function computeChurnSegments(clients: AnalyticsClient[]): ChurnSegment[]
   return TIER_ORDER.map(t => segments[t]).filter(s => s.count > 0);
 }
 
-export function buildAiStrategies(clients: AnalyticsClient[], businessName: string): AiStrategy[] {
-  const segments = computeChurnSegments(clients);
+export function buildAiStrategies(
+  clients: AnalyticsClient[],
+  businessName: string,
+  excludeClientIds?: Set<string>
+): AiStrategy[] {
+  const exclude = excludeClientIds ?? new Set<string>();
+  const filteredClients = clients.filter(c => !exclude.has(c.id));
+  const segments = computeChurnSegments(filteredClients);
   const strategies: AiStrategy[] = [];
+
+  // Count how many clients in each tier have been contacted (for display)
+  const allSegments = computeChurnSegments(clients);
+  const contactedByTier = new Map<string, number>();
+  for (const seg of allSegments) {
+    const contacted = seg.clients.filter(c => exclude.has(c.id)).length;
+    if (contacted > 0) contactedByTier.set(seg.tier, contacted);
+  }
 
   for (const seg of segments) {
     if (seg.tier === 'active' || seg.count === 0) continue;
@@ -206,6 +221,7 @@ export function buildAiStrategies(clients: AnalyticsClient[], businessName: stri
       title,
       priority,
       clientCount: seg.count,
+      contactedCount: contactedByTier.get(seg.tier) ?? 0,
       estimatedRevenue: `£${seg.estimatedRecoverable.toLocaleString()}`,
       insight,
       recommendation,

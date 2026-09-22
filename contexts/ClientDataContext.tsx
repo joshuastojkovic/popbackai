@@ -131,10 +131,6 @@ export function ClientDataProvider({ children }: { children: ReactNode }) {
     };
   }, [user, fetchClients, fetchCampaigns]);
 
-  // Derived data
-  const segments = computeChurnSegments(clients);
-  const strategies = buildAiStrategies(clients, 'your business');
-
   // Collect IDs of clients who have been contacted (have campaign_recipients with sent_at)
   const [contactedIds, setContactedIds] = useState<Set<string>>(new Set());
 
@@ -166,6 +162,10 @@ export function ClientDataProvider({ children }: { children: ReactNode }) {
         setContactedIds(ids);
       });
   }, [campaigns]);
+
+  // Derived data (after contactedIds so strategies can use it)
+  const segments = computeChurnSegments(clients);
+  const strategies = buildAiStrategies(clients, 'your business', contactedIds);
 
   // Stats
   const activeCampaignsList = campaigns.filter(c => !c.deleted_at);

@@ -29,6 +29,7 @@ import {
   Smartphone,
   Copy,
   Check,
+  CheckCircle,
   Zap,
   Target,
   Lightbulb,
@@ -95,7 +96,7 @@ export default function ConsultantPage() {
   const businessName = profile?.business_name ?? 'your business';
   const { toast } = useToast();
 
-  const { clients, segments: contextSegments, loading, refresh, refreshCampaigns } = useClientData();
+  const { clients, segments: contextSegments, strategies: contextStrategies, loading, refresh, refreshCampaigns } = useClientData();
   const [strategies, setStrategies] = useState<AiStrategy[]>([]);
   const [segments, setSegments] = useState<ChurnSegment[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -107,18 +108,17 @@ export default function ConsultantPage() {
   const [generating, setGenerating] = useState(false);
   const [expandedWhy, setExpandedWhy] = useState<string | null>(null);
 
-  // Derive strategies from shared context clients
+  // Use strategies from shared context (already filters out contacted clients)
   useEffect(() => {
+    setStrategies(contextStrategies);
     const segs = computeChurnSegments(clients);
     setSegments(segs);
-    const strats = buildAiStrategies(clients, businessName);
-    setStrategies(strats);
-    if (strats.length > 0 && !selectedStrategy) {
-      setSelectedStrategy(strats[0]);
-      setSubject(strats[0].suggestedSubject);
-      setBody(strats[0].suggestedBody);
+    if (contextStrategies.length > 0 && !selectedStrategy) {
+      setSelectedStrategy(contextStrategies[0]);
+      setSubject(contextStrategies[0].suggestedSubject);
+      setBody(contextStrategies[0].suggestedBody);
     }
-  }, [clients, businessName, selectedStrategy]);
+  }, [contextStrategies, clients, selectedStrategy]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -273,6 +273,26 @@ export default function ConsultantPage() {
             </Button>
           </Link>
         </div>
+      ) : strategies.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-20 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-emerald-50 flex items-center justify-center mb-4">
+            <CheckCircle className="w-8 h-8 text-emerald-500" />
+          </div>
+          <h3 className="text-base font-bold text-gray-700 mb-1">All at-risk clients contacted</h3>
+          <p className="text-sm text-gray-400 max-w-xs mb-5">
+            You've reached out to every lapsed client segment. New recommendations will appear as more clients lapse — check back after a few weeks.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="gap-1.5"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+            Refresh Analysis
+          </Button>
+        </div>
       ) : (
         <div className="grid lg:grid-cols-2 gap-6">
           {/* LEFT: AI Strategy Recommendations */}
@@ -304,6 +324,12 @@ export default function ConsultantPage() {
                       <span className="text-xs font-semibold text-gray-700">
                         <span className="text-blue-600">{s.clientCount}</span> clients
                       </span>
+                      {s.contactedCount > 0 && (
+                        <span className="text-xs font-semibold text-emerald-600 flex items-center gap-1">
+                          <Check className="w-3 h-3" />
+                          {s.contactedCount} already contacted
+                        </span>
+                      )}
                       <span className="text-xs font-semibold text-emerald-700">
                         ~{s.estimatedRevenue} recoverable
                       </span>
