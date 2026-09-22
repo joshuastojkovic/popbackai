@@ -243,58 +243,306 @@ export function applyPersonalization(
     .replace(/\[Name\]/g, firstName);
 }
 
-// ── AI Chatbot answer engine ─────────────────────────────────────────────────
+// ── Open-ended AI Chatbot query engine ───────────────────────────────────────
 
 export type ChatMessage = {
   role: 'user' | 'assistant';
   content: string;
+  id: string;
+  // Optional: context for follow-up queries (e.g., last filtered client list)
+  context?: { lastFilteredClients?: AnalyticsClient[]; lastIntent?: string };
 };
 
 const PROMPT_CHIPS = [
-  'Who are my top 5 lost clients?',
-  "What's my average churn rate?",
+  'Show my top 5 VIP lapsed clients',
+  'Which clients spent over £100 but haven\'t visited in 60 days?',
   'Which barber has the highest lost client rate?',
-  'How much revenue can I recover?',
-  'Which service has the most lapsed clients?',
+  'Calculate average visit interval',
+  'Draft a quick SMS for clients who only get beard trims',
 ];
 
 export { PROMPT_CHIPS };
 
-export function answerClientQuery(query: string, clients: AnalyticsClient[]): string {
-  const q = query.toLowerCase().trim();
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
-  // Top 5 lost/highest-value clients
-  if (q.match(/top.*lost|lost.*top|biggest.*spend.*lost|highest.*value.*lost/) || q.match(/top 5.*lost|top five.*lost/)) {
-    const lost = clients
-      .filter(c => c.lifetime_spend && c.lifetime_spend > 0)
-      .sort((a, b) => (b.lifetime_spend ?? 0) - (a.lifetime_spend ?? 0))
-      .slice(0, 5);
-    if (lost.length === 0) return "I couldn't find any clients with recorded spend data. Try importing a CSV with a 'Lifetime Spend' column.";
-    const lines = lost.map((c, i) => `${i + 1}. **${c.name}** — £${(c.lifetime_spend ?? 0).toLocaleString()} lifetime spend, last visited ${c.last_visit_date ? new Date(c.last_visit_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'unknown'}`);
-    return `Here are your top 5 highest-value lost clients:\n\n${lines.join('\n')}\n\nThese represent significant recoverable revenue. I'd recommend a High-Value Client Recovery campaign targeting them first.`;
+function uid(): string {
+  return Math.random().toString(36).substring(2, 11);
+}
+
+function fmtDate(iso: string | null): string {
+  if (!iso) return 'unknown';
+  return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function extractNumber(query: string, patterns: RegExp[]): number | null {
+  for (const p of patterns) {
+    const m = query.match(p);
+    if (m && m[1]) {
+      const n = parseInt(m[1].replace(/[,£]/g, ''), 10);
+      if (!isNaN(n)) return n;
+    }
+  }
+  return null;
+}
+
+function extractDays(query: string): number | null {
+  // "haven't visited in 60 days", "lapsed 90 days", "in 3 months", "6 months"
+  const dayMatch = query.match(/(\d+)\s*day/i);
+  if (dayMatch) return parseInt(dayMatch[1], 10);
+
+  const monthMatch = query.match(/(\d+)\s*month/i);
+  if (monthMatch) return parseInt(monthMatch[1], 10) * 30;
+
+  const weekMatch = query.match(/(\d+)\s*week/i);
+  if (weekMatch) return parseInt(weekMatch[1], 10) * 7;
+
+  // "over a year", "over 1 year"
+  const yearMatch = query.match(/(\d+)\s*year/i);
+  if (yearMatch) return parseInt(yearMatch[1], 10) * 365;
+
+  return null;
+}
+
+function extractStaffName(query: string, clients: AnalyticsClient[]): string | null {
+  const staffNames = new Set<string>();
+  for (const c of clients) {
+    if (c.preferred_staff) staffNames.add(c.preferred_staff);
+  }
+  if (staffNames.size === 0) return null;
+  const q = query.toLowerCase();
+  for (const name of Array.from(staffNames)) {
+    if (q.includes(name.toLowerCase())) return name;
+  }
+  // Also check for partial first name matches
+  for (const name of Array.from(staffNames)) {
+    const parts = name.toLowerCase().split(/\s+/);
+    for (const part of parts) {
+      if (part.length > 3 && q.includes(part)) return name;
+    }
+  }
+  return null;
+}
+
+function extractServiceName(query: string, clients: AnalyticsClient[]): string | null {
+  const serviceNames = new Set<string>();
+  for (const c of clients) {
+    if (c.preferred_service) serviceNames.add(c.preferred_service);
+  }
+  if (serviceNames.size === 0) return null;
+  const q = query.toLowerCase();
+  for (const name of Array.from(serviceNames)) {
+    if (q.includes(name.toLowerCase())) return name;
+  }
+  // Partial match
+  for (const name of Array.from(serviceNames)) {
+    const lower = name.toLowerCase();
+    if (q.includes(lower.substring(0, Math.min(5, lower.length)))) return name;
+  }
+  return null;
+}
+
+function isLapsed(c: AnalyticsClient, minDays: number): boolean {
+  const days = daysSinceVisit(c.last_visit_date);
+  return days !== null && days >= minDays;
+}
+
+// ── Main query engine ────────────────────────────────────────────────────────
+
+export function answerClientQuery(
+  query: string,
+  clients: AnalyticsClient[],
+  history?: ChatMessage[]
+): ChatMessage {
+  const q = query.toLowerCase().trim();
+  const lastAssistant = history?.filter(m => m.role === 'assistant').pop();
+  const lastContext = lastAssistant?.context;
+  let contextClients: AnalyticsClient[] | undefined;
+  let intent = '';
+
+  // ── Intent: Draft SMS / message for a specific service ──
+  if (q.match(/draft.*sms|write.*sms|create.*sms|draft.*message|write.*message|draft.*whatsapp/) || q.match(/quick.*sms/)) {
+    intent = 'draft_sms';
+    const serviceName = extractServiceName(query, clients);
+    const targetService = serviceName ?? (q.includes('beard') ? 'Beard Trim' : null);
+
+    if (targetService) {
+      const matching = clients.filter(c => c.preferred_service?.toLowerCase().includes(targetService.toLowerCase()));
+      if (matching.length === 0) {
+        return { role: 'assistant', id: uid(), content: `I couldn't find any clients who get ${targetService}. Make sure your CSV has a 'Preferred Service' column with this value.` };
+      }
+      const lapsedMatching = matching.filter(c => isLapsed(c, 60));
+      const sms = `Hi {{first_name}}, it's your favourite barbershop! 👋 Time for your ${targetService.toLowerCase()}? We've got slots this week. Tap here to book: [link]`;
+      return {
+        role: 'assistant',
+        id: uid(),
+        content: `Here's a quick SMS draft for clients who get **${targetService}** (${matching.length} clients, ${lapsedMatching.length} currently lapsed 60+ days):\n\n---\n${sms}\n---\n\nWant me to create a campaign with this message? Just say "create a campaign for these clients".`,
+        context: { lastFilteredClients: matching, lastIntent: intent },
+      };
+    }
+    // Generic SMS draft
+    const sms = `Hi {{first_name}}, we miss you at our shop! 👋 Time for your next visit? We've got slots open this week. Tap to book: [link]`;
+    return {
+      role: 'assistant',
+      id: uid(),
+      content: `Here's a general win-back SMS draft:\n\n---\n${sms}\n---\n\nYou can personalise this by specifying a service (e.g., "Draft an SMS for clients who get haircuts").`,
+      context: { lastIntent: intent },
+    };
   }
 
-  // Average churn rate
-  if (q.match(/churn rate|average churn|retention rate/)) {
+  // ── Intent: Create campaign from last filtered clients ──
+  if (q.match(/create.*campaign|make.*campaign|build.*campaign|launch.*campaign/) && lastContext?.lastFilteredClients) {
+    intent = 'create_campaign';
+    const targetClients = lastContext.lastFilteredClients;
+    return {
+      role: 'assistant',
+      id: uid(),
+      content: `I can create a campaign targeting those ${targetClients.length} clients. Go to the **Campaigns** page and click "New Campaign" — I'll pre-fill the targeting for you.\n\nAlternatively, I can save it as a draft right now if you say "save as draft". The target segment will be set to match these ${targetClients.length} clients' churn profile.`,
+      context: { lastFilteredClients: targetClients, lastIntent: intent },
+    };
+  }
+
+  // ── Intent: Clients who spent over X but haven't visited in Y days ──
+  if ((q.includes('spent') || q.includes('spend')) && (q.includes('not visited') || q.includes("haven't visited") || q.includes('lapsed') || q.includes('overdue') || q.includes("haven't been"))) {
+    intent = 'spend_and_lapse';
+    const minSpend = extractNumber(q, [/spent over £?(\d+)/i, /spend.{0,10}£?(\d+)/i, /over £?(\d+)/i, /more than £?(\d+)/i]) ?? 0;
+    const minDays = extractDays(query) ?? 60;
+
+    const matching = clients.filter(c => {
+      const spend = c.lifetime_spend ?? 0;
+      const days = daysSinceVisit(c.last_visit_date);
+      return spend > minSpend && days !== null && days >= minDays;
+    });
+
+    if (matching.length === 0) {
+      return { role: 'assistant', id: uid(), content: `No clients found who spent over £${minSpend} and haven't visited in ${minDays}+ days. Try adjusting your thresholds.` };
+    }
+
+    const lines = matching
+      .sort((a, b) => (b.lifetime_spend ?? 0) - (a.lifetime_spend ?? 0))
+      .slice(0, 10)
+      .map((c, i) => `${i + 1}. **${c.name}** — £${(c.lifetime_spend ?? 0).toLocaleString()} spend, last visited ${fmtDate(c.last_visit_date)} (${daysSinceVisit(c.last_visit_date)} days ago)${c.preferred_staff ? `, saw ${c.preferred_staff}` : ''}`);
+
+    return {
+      role: 'assistant',
+      id: uid(),
+      content: `Found **${matching.length} clients** who spent over £${minSpend} and haven't visited in ${minDays}+ days:\n\n${lines.join('\n')}${matching.length > 10 ? `\n\n...and ${matching.length - 10} more.` : ''}\n\nTotal spend from these clients: £${matching.reduce((s, c) => s + (c.lifetime_spend ?? 0), 0).toLocaleString()}\n\nWant me to create a campaign for them? Just say "create a campaign for these clients".`,
+      context: { lastFilteredClients: matching, lastIntent: intent },
+    };
+  }
+
+  // ── Intent: Most loyal client of a specific barber who lapsed ──
+  if ((q.includes('loyal') || q.includes('best') || q.includes('top') || q.includes('vip')) && (q.includes('lapsed') || q.includes('lost') || q.includes("haven't") || q.includes('churn'))) {
+    intent = 'loyal_lapsed';
+    const staffName = extractStaffName(query, clients);
+    const minDays = extractDays(query) ?? 60;
+
+    let pool = clients.filter(c => isLapsed(c, minDays));
+    if (staffName) {
+      pool = pool.filter(c => c.preferred_staff?.toLowerCase() === staffName.toLowerCase());
+    }
+
+    if (pool.length === 0) {
+      return { role: 'assistant', id: uid(), content: staffName
+        ? `No lapsed clients found for ${staffName}. Try a different staff member or time range.`
+        : `No lapsed clients found. Try importing more client data.` };
+    }
+
+    const sorted = pool.sort((a, b) => (b.lifetime_spend ?? 0) - (a.lifetime_spend ?? 0));
+    const top = sorted.slice(0, 5);
+    const lines = top.map((c, i) => `${i + 1}. **${c.name}** — £${(c.lifetime_spend ?? 0).toLocaleString()} lifetime spend, last visited ${fmtDate(c.last_visit_date)}${c.preferred_staff ? `, saw ${c.preferred_staff}` : ''}${c.preferred_service ? `, ${c.preferred_service}` : ''}`);
+
+    return {
+      role: 'assistant',
+      id: uid(),
+      content: `Here are your top ${top.length} highest-value lapsed clients${staffName ? ` who saw ${staffName}` : ''} (${minDays}+ days):\n\n${lines.join('\n')}\n\n${staffName ? `${staffName} has ${pool.length} total lapsed clients.` : `You have ${pool.length} total lapsed clients.`} These represent £${top.reduce((s, c) => s + (c.lifetime_spend ?? 0), 0).toLocaleString()} in lifetime spend.\n\nWant me to create a campaign for them?`,
+      context: { lastFilteredClients: sorted, lastIntent: intent },
+    };
+  }
+
+  // ── Intent: Average visit interval ──
+  if (q.match(/average.*visit.*interval|visit.*frequency|how often.*visit|average.*between.*visit/)) {
+    intent = 'avg_interval';
+    const withDates = clients.filter(c => c.last_visit_date);
+    if (withDates.length === 0) {
+      return { role: 'assistant', id: uid(), content: "I don't have visit date data yet. Import a CSV with a 'Last Visit Date' column." };
+    }
+    // Estimate average interval from first to last visit — but we only have last_visit_date
+    // So we'll estimate based on the distribution of days since last visit
+    const now = Date.now();
+    const daysSince = withDates.map(c => {
+      const d = c.last_visit_date ? Math.floor((now - new Date(c.last_visit_date).getTime()) / 86400000) : 0;
+      return d;
+    });
+    const avgDays = Math.round(daysSince.reduce((a, b) => a + b, 0) / daysSince.length);
+    const median = [...daysSince].sort((a, b) => a - b)[Math.floor(daysSince.length / 2)];
+
+    return {
+      role: 'assistant',
+      id: uid(),
+      content: `Based on your ${withDates.length} clients with visit dates:\n\n• Average days since last visit: **${avgDays} days** (~${Math.round(avgDays / 7)} weeks)\n• Median: **${median} days**\n• Shortest gap: ${Math.min(...daysSince)} days\n• Longest gap: ${Math.max(...daysSince)} days\n\nThis suggests your clients typically visit every ~${Math.round(avgDays / 7)} weeks. Clients past this interval are candidates for a reminder campaign.`,
+      context: { lastIntent: intent },
+    };
+  }
+
+  // ── Intent: Top N VIP lapsed clients ──
+  if (q.match(/top.*vip|vip.*lapsed|top.*lapsed|top.*lost|lost.*top|biggest.*spend.*lost|highest.*value.*lost/) || q.match(/top \d+.*lost|top \d+.*lapsed/)) {
+    intent = 'top_vip_lapsed';
+    const n = extractNumber(q, [/top (\d+)/i, /top (\d+)/i]) ?? 5;
+    const minDays = extractDays(query) ?? 60;
+
+    const lapsed = clients
+      .filter(c => c.lifetime_spend && c.lifetime_spend > 0 && isLapsed(c, minDays))
+      .sort((a, b) => (b.lifetime_spend ?? 0) - (a.lifetime_spend ?? 0))
+      .slice(0, n);
+
+    if (lapsed.length === 0) {
+      return { role: 'assistant', id: uid(), content: `No clients with spend data found who are lapsed ${minDays}+ days. Import a CSV with 'Lifetime Spend' and 'Last Visit Date' columns.` };
+    }
+
+    const lines = lapsed.map((c, i) => `${i + 1}. **${c.name}** — £${(c.lifetime_spend ?? 0).toLocaleString()} lifetime spend, last visited ${fmtDate(c.last_visit_date)} (${daysSinceVisit(c.last_visit_date)} days ago)${c.preferred_staff ? `, saw ${c.preferred_staff}` : ''}${c.preferred_service ? `, ${c.preferred_service}` : ''}`);
+
+    return {
+      role: 'assistant',
+      id: uid(),
+      content: `Here are your top ${lapsed.length} highest-value lapsed clients (${minDays}+ days):\n\n${lines.join('\n')}\n\nTotal recoverable spend: £${lapsed.reduce((s, c) => s + (c.lifetime_spend ?? 0), 0).toLocaleString()}\n\nWant me to create a campaign for them? Just say "create a campaign for these clients".`,
+      context: { lastFilteredClients: lapsed, lastIntent: intent },
+    };
+  }
+
+  // ── Intent: Churn rate ──
+  if (q.match(/churn rate|average churn|retention rate|overall.*churn/)) {
+    intent = 'churn_rate';
     const segments = computeChurnSegments(clients);
     const atRisk = segments.filter(s => s.tier !== 'active').reduce((sum, s) => sum + s.count, 0);
     const rate = clients.length > 0 ? Math.round((atRisk / clients.length) * 100) : 0;
     const active = clients.length - atRisk;
-    return `Your current churn rate is **${rate}%** — ${atRisk} out of ${clients.length} clients are at-risk or lapsed.\n\n• Active: ${active} (${100 - rate}%)\n• At-risk/lapsed: ${atRisk} (${rate}%)\n\n${rate > 30 ? 'This is above the industry average of ~25% for service businesses. I\'d recommend prioritising the Slipping Away and High-Value At Risk segments.' : 'This is within a healthy range. Keep monitoring with regular check-ins.'}`;
+    const breakdown = segments.filter(s => s.tier !== 'active').map(s => `• ${CHURN_TIER_CONFIG[s.tier].label}: ${s.count}`).join('\n');
+    return {
+      role: 'assistant',
+      id: uid(),
+      content: `Your current churn rate is **${rate}%** — ${atRisk} out of ${clients.length} clients are at-risk or lapsed.\n\n• Active: ${active} (${100 - rate}%)\n• At-risk/lapsed: ${atRisk} (${rate}%)\n\n${breakdown}\n\n${rate > 30 ? 'This is above the industry average of ~25% for service businesses. I\'d recommend prioritising the Slipping Away and High-Value At Risk segments.' : 'This is within a healthy range. Keep monitoring with regular check-ins.'}`,
+      context: { lastIntent: intent },
+    };
   }
 
-  // Which barber/staff has highest lost client rate
-  if (q.match(/barber|staff|stylist|therapist.*lost|which.*staff/)) {
-    const staffMap = new Map<string, { total: number; lost: number }>();
+  // ── Intent: Staff/barber lost client rate ──
+  if (q.match(/barber|staff|stylist|therapist.*lost|which.*staff|staff.*rate|barber.*rate/)) {
+    intent = 'staff_rate';
+    const staffName = extractStaffName(query, clients);
+    const staffMap = new Map<string, { total: number; lost: number; lapsedSpend: number }>();
     for (const c of clients) {
       if (!c.preferred_staff) continue;
-      const entry = staffMap.get(c.preferred_staff) ?? { total: 0, lost: 0 };
+      const entry = staffMap.get(c.preferred_staff) ?? { total: 0, lost: 0, lapsedSpend: 0 };
       entry.total++;
-      const days = daysSinceVisit(c.last_visit_date);
-      if (days !== null && days >= 60) entry.lost++;
+      if (isLapsed(c, 60)) {
+        entry.lost++;
+        entry.lapsedSpend += c.lifetime_spend ?? 0;
+      }
       staffMap.set(c.preferred_staff, entry);
     }
-    if (staffMap.size === 0) return "I don't have staff data for your clients yet. Import a CSV with a 'Preferred Staff' or 'Barber' column and I'll be able to break this down.";
+    if (staffMap.size === 0) {
+      return { role: 'assistant', id: uid(), content: "I don't have staff data for your clients yet. Import a CSV with a 'Preferred Staff' or 'Barber' column and I'll be able to break this down." };
+    }
     const sorted = Array.from(staffMap.entries()).sort((a, b) => {
       const rateA = a[1].total > 0 ? a[1].lost / a[1].total : 0;
       const rateB = b[1].total > 0 ? b[1].lost / b[1].total : 0;
@@ -302,47 +550,161 @@ export function answerClientQuery(query: string, clients: AnalyticsClient[]): st
     });
     const lines = sorted.map(([name, data]) => {
       const rate = data.total > 0 ? Math.round((data.lost / data.total) * 100) : 0;
-      return `• **${name}**: ${data.lost}/${data.total} clients lost (${rate}%)`;
+      return `• **${name}**: ${data.lost}/${data.total} clients lost (${rate}%) — £${data.lapsedSpend.toLocaleString()} at risk`;
     });
-    return `Here's the lost client rate by staff member:\n\n${lines.join('\n')}\n\n${sorted[0] && sorted[0][1].lost / sorted[0][1].total > 0.3 ? `**${sorted[0][0]}** has the highest loss rate. This could indicate a scheduling issue, a change in availability, or client satisfaction concerns. Consider whether this staff member's clients need a more targeted win-back approach.` : 'Loss rates are relatively even across your team.'}`;
+
+    let extra = '';
+    if (staffName && staffMap.has(staffName)) {
+      const data = staffMap.get(staffName)!;
+      extra = `\n\nSpecifically for **${staffName}**: ${data.lost} of ${data.total} clients have lapsed (60+ days), representing £${data.lapsedSpend.toLocaleString()} in lifetime spend.`;
+    }
+
+    return {
+      role: 'assistant',
+      id: uid(),
+      content: `Here's the lost client rate by staff member:\n\n${lines.join('\n')}${extra}\n\n${sorted[0] && sorted[0][1].lost / sorted[0][1].total > 0.3 ? `**${sorted[0][0]}** has the highest loss rate. This could indicate a scheduling issue, a change in availability, or client satisfaction concerns.` : 'Loss rates are relatively even across your team.'}`,
+      context: { lastIntent: intent },
+    };
   }
 
-  // Recoverable revenue
-  if (q.match(/recover.*revenue|how much.*recover|recoverable|revenue.*recover/)) {
+  // ── Intent: Recoverable revenue ──
+  if (q.match(/recover.*revenue|how much.*recover|recoverable|revenue.*recover|how much.*lost/)) {
+    intent = 'recoverable';
     const segments = computeChurnSegments(clients);
     const total = totalRecoverableRevenue(segments);
     const breakdown = segments
       .filter(s => s.estimatedRecoverable > 0)
       .map(s => `• ${CHURN_TIER_CONFIG[s.tier].label}: £${s.estimatedRecoverable.toLocaleString()} (${s.count} clients)`)
       .join('\n');
-    return `Your total estimated recoverable revenue is **£${total.toLocaleString()}**.\n\n${breakdown}\n\nThis is based on historical recovery rates for each churn tier. The High-Value At Risk segment offers the best ROI per client reached.`;
+    return {
+      role: 'assistant',
+      id: uid(),
+      content: `Your total estimated recoverable revenue is **£${total.toLocaleString()}**.\n\n${breakdown}\n\nThis is based on historical recovery rates for each churn tier. The High-Value At Risk segment offers the best ROI per client reached.`,
+      context: { lastIntent: intent },
+    };
   }
 
-  // Which service has most lapsed clients
-  if (q.match(/service.*lapsed|lapsed.*service|which.*service|service.*churn/)) {
-    const serviceMap = new Map<string, { total: number; lapsed: number }>();
+  // ── Intent: Service lapsed rate ──
+  if (q.match(/service.*lapsed|lapsed.*service|which.*service|service.*churn|service.*lost/)) {
+    intent = 'service_lapsed';
+    const serviceName = extractServiceName(query, clients);
+    const serviceMap = new Map<string, { total: number; lapsed: number; lapsedSpend: number }>();
     for (const c of clients) {
       if (!c.preferred_service) continue;
-      const entry = serviceMap.get(c.preferred_service) ?? { total: 0, lapsed: 0 };
+      const entry = serviceMap.get(c.preferred_service) ?? { total: 0, lapsed: 0, lapsedSpend: 0 };
       entry.total++;
-      const days = daysSinceVisit(c.last_visit_date);
-      if (days !== null && days >= 60) entry.lapsed++;
+      if (isLapsed(c, 60)) {
+        entry.lapsed++;
+        entry.lapsedSpend += c.lifetime_spend ?? 0;
+      }
       serviceMap.set(c.preferred_service, entry);
     }
-    if (serviceMap.size === 0) return "I don't have service data for your clients yet. Import a CSV with a 'Preferred Service' or 'Last Service' column.";
+    if (serviceMap.size === 0) {
+      return { role: 'assistant', id: uid(), content: "I don't have service data for your clients yet. Import a CSV with a 'Preferred Service' or 'Last Service' column." };
+    }
     const sorted = Array.from(serviceMap.entries()).sort((a, b) => b[1].lapsed - a[1].lapsed);
-    const lines = sorted.map(([service, data]) => `• **${service}**: ${data.lapsed}/${data.total} lapsed (${data.total > 0 ? Math.round((data.lapsed / data.total) * 100) : 0}%)`);
-    return `Here's the lapsed rate by service:\n\n${lines.join('\n')}\n\n${sorted[0] && sorted[0][1].lapsed > 0 ? `**${sorted[0][0]}** has the most lapsed clients. This could indicate pricing concerns, availability issues, or that clients are trying alternatives. Consider a targeted campaign for this service.` : 'No significant service-level churn patterns detected.'}`;
+    const lines = sorted.map(([service, data]) => `• **${service}**: ${data.lapsed}/${data.total} lapsed (${data.total > 0 ? Math.round((data.lapsed / data.total) * 100) : 0}%) — £${data.lapsedSpend.toLocaleString()} at risk`);
+
+    let extra = '';
+    if (serviceName && serviceMap.has(serviceName)) {
+      const data = serviceMap.get(serviceName)!;
+      const matching = clients.filter(c => c.preferred_service?.toLowerCase() === serviceName.toLowerCase() && isLapsed(c, 60));
+      extra = `\n\nSpecifically for **${serviceName}**: ${data.lapsed} of ${data.total} clients have lapsed, representing £${data.lapsedSpend.toLocaleString()} in lifetime spend.`;
+      return {
+        role: 'assistant',
+        id: uid(),
+        content: `Here's the lapsed rate by service:\n\n${lines.join('\n')}${extra}\n\nI found ${matching.length} lapsed clients who get ${serviceName}. Want me to draft a message for them?`,
+        context: { lastFilteredClients: matching, lastIntent: intent },
+      };
+    }
+
+    return {
+      role: 'assistant',
+      id: uid(),
+      content: `Here's the lapsed rate by service:\n\n${lines.join('\n')}\n\n${sorted[0] && sorted[0][1].lapsed > 0 ? `**${sorted[0][0]}** has the most lapsed clients. Consider a targeted campaign for this service.` : 'No significant service-level churn patterns detected.'}`,
+      context: { lastIntent: intent },
+    };
   }
 
-  // How many at-risk
-  if (q.match(/how many.*at.risk|at.risk.*how many|at risk count/)) {
+  // ── Intent: How many at-risk ──
+  if (q.match(/how many.*at.risk|at.risk.*how many|at risk count|how many.*lapsed/)) {
+    intent = 'at_risk_count';
     const segments = computeChurnSegments(clients);
     const atRisk = segments.filter(s => s.tier !== 'active').reduce((sum, s) => sum + s.count, 0);
     const breakdown = segments.filter(s => s.tier !== 'active').map(s => `• ${CHURN_TIER_CONFIG[s.tier].label}: ${s.count}`).join('\n');
-    return `You have **${atRisk} at-risk clients** out of ${clients.length} total.\n\n${breakdown}\n\nVisit the AI Consultant page to get personalised win-back strategies for each segment.`;
+    return {
+      role: 'assistant',
+      id: uid(),
+      content: `You have **${atRisk} at-risk clients** out of ${clients.length} total.\n\n${breakdown}\n\nVisit the AI Consultant page to get personalised win-back strategies for each segment.`,
+      context: { lastIntent: intent },
+    };
   }
 
-  // Default / fallback
-  return `I can answer questions about your client data. Try asking:\n\n• "Who are my top 5 lost clients?"\n• "What's my average churn rate?"\n• "Which barber has the highest lost client rate?"\n• "How much revenue can I recover?"\n• "Which service has the most lapsed clients?"\n\nYou can also click any of the suggested prompts below.`;
+  // ── Intent: List all clients / show me everyone ──
+  if (q.match(/list.*all|show.*all|everyone|all.*clients|how many.*client/)) {
+    intent = 'list_all';
+    const allSegments = computeChurnSegments(clients);
+    return {
+      role: 'assistant',
+      id: uid(),
+      content: `You have **${clients.length} clients** in total.\n\n${allSegments.map(s => `• ${CHURN_TIER_CONFIG[s.tier].label}: ${s.count}`).join('\n')}\n\nYou can see the full list on the Clients page. Ask me to filter by spend, days lapsed, staff, or service for a more targeted view.`,
+      context: { lastIntent: intent },
+    };
+  }
+
+  // ── Intent: Greeting / help ──
+  if (q.match(/^(hi|hello|hey|help|what can you|what do you)/)) {
+    intent = 'help';
+    return {
+      role: 'assistant',
+      id: uid(),
+      content: `Hi! I'm your AI Retention Consultant. I've analyzed your ${clients.length} clients. I can answer questions like:\n\n• "Which clients spent over £100 but haven't visited in 60 days?"\n• "Show my top 5 VIP lapsed clients"\n• "Which barber has the highest lost client rate?"\n• "How much revenue can I recover?"\n• "Draft a quick SMS for clients who only get beard trims"\n• "Calculate average visit interval"\n\nAsk me anything about your client data, or try a suggested prompt below.`,
+      context: { lastIntent: intent },
+    };
+  }
+
+  // ── Fallback: try to extract any filter criteria and show results ──
+  const minSpend = extractNumber(q, [/spent over £?(\d+)/i, /spend.{0,10}£?(\d+)/i, /over £?(\d+)/i, /more than £?(\d+)/i]);
+  const minDays = extractDays(query);
+  const staffName = extractStaffName(query, clients);
+  const serviceName = extractServiceName(query, clients);
+
+  if (minSpend !== null || minDays !== null || staffName || serviceName) {
+    intent = 'filtered';
+    let matching = [...clients];
+    if (minSpend !== null) matching = matching.filter(c => (c.lifetime_spend ?? 0) > minSpend);
+    if (minDays !== null) matching = matching.filter(c => isLapsed(c, minDays));
+    if (staffName) matching = matching.filter(c => c.preferred_staff?.toLowerCase() === staffName.toLowerCase());
+    if (serviceName) matching = matching.filter(c => c.preferred_service?.toLowerCase() === serviceName.toLowerCase());
+
+    if (matching.length === 0) {
+      return { role: 'assistant', id: uid(), content: `No clients match those criteria. Try widening your filters — for example, a lower spend threshold or fewer days.` };
+    }
+
+    const lines = matching
+      .sort((a, b) => (b.lifetime_spend ?? 0) - (a.lifetime_spend ?? 0))
+      .slice(0, 10)
+      .map((c, i) => `${i + 1}. **${c.name}** — £${(c.lifetime_spend ?? 0).toLocaleString()} spend, last visited ${fmtDate(c.last_visit_date)}${c.preferred_staff ? `, ${c.preferred_staff}` : ''}${c.preferred_service ? `, ${c.preferred_service}` : ''}`);
+
+    const filters: string[] = [];
+    if (minSpend !== null) filters.push(`spend > £${minSpend}`);
+    if (minDays !== null) filters.push(`${minDays}+ days lapsed`);
+    if (staffName) filters.push(`staff: ${staffName}`);
+    if (serviceName) filters.push(`service: ${serviceName}`);
+
+    return {
+      role: 'assistant',
+      id: uid(),
+      content: `Found **${matching.length} clients** matching: ${filters.join(', ')}\n\n${lines.join('\n')}${matching.length > 10 ? `\n\n...and ${matching.length - 10} more.` : ''}\n\nWant me to create a campaign for these clients?`,
+      context: { lastFilteredClients: matching, lastIntent: intent },
+    };
+  }
+
+  // ── Default fallback ──
+  return {
+    role: 'assistant',
+    id: uid(),
+    content: `I'm not sure how to answer that yet, but I'm learning! I can answer questions about:\n\n• **Client filtering** — "Which clients spent over £100 but haven't visited in 60 days?"\n• **VIP lapsed** — "Show my top 5 VIP lapsed clients"\n• **Staff analysis** — "Which barber has the highest lost client rate?"\n• **Revenue** — "How much revenue can I recover?"\n• **Service insights** — "Which service has the most lapsed clients?"\n• **Message drafting** — "Draft a quick SMS for clients who only get beard trims"\n• **Visit patterns** — "Calculate average visit interval"\n\nTry one of these, or ask your own question using similar phrasing.`,
+    context: { lastIntent: 'fallback' },
+  };
 }

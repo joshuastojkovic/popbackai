@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { useClientData } from '@/contexts/ClientDataContext';
 import { buildAiStrategies, applyPersonalization, AnalyticsClient, AiStrategy } from '@/lib/analytics';
 import { computeChurnSegments, totalRecoverableRevenue, ChurnSegment } from '@/lib/analytics';
 import { CHURN_TIER_CONFIG, ChurnTier } from '@/lib/csvParser';
@@ -94,10 +95,9 @@ export default function ConsultantPage() {
   const businessName = profile?.business_name ?? 'your business';
   const { toast } = useToast();
 
-  const [clients, setClients] = useState<AnalyticsClient[]>([]);
+  const { clients, segments: contextSegments, loading, refresh, refreshCampaigns } = useClientData();
   const [strategies, setStrategies] = useState<AiStrategy[]>([]);
   const [segments, setSegments] = useState<ChurnSegment[]>([]);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedStrategy, setSelectedStrategy] = useState<AiStrategy | null>(null);
   const [channel, setChannel] = useState<Channel>('email');
@@ -107,34 +107,25 @@ export default function ConsultantPage() {
   const [generating, setGenerating] = useState(false);
   const [expandedWhy, setExpandedWhy] = useState<string | null>(null);
 
-  const fetchClients = useCallback(async (isRefresh = false) => {
-    if (isRefresh) setRefreshing(true);
-    const { data } = await supabase.from('clients').select('id, name, email, phone, last_visit_date, lifetime_spend, preferred_service, preferred_staff, churn_tier, review_requested, review_completed');
-    const allClients = (data ?? []) as AnalyticsClient[];
-    setClients(allClients);
-
-    const segs = computeChurnSegments(allClients);
+  // Derive strategies from shared context clients
+  useEffect(() => {
+    const segs = computeChurnSegments(clients);
     setSegments(segs);
-
-    const strats = buildAiStrategies(allClients, businessName);
+    const strats = buildAiStrategies(clients, businessName);
     setStrategies(strats);
-
-    if (strats.length > 0 && (!selectedStrategy || isRefresh)) {
+    if (strats.length > 0 && !selectedStrategy) {
       setSelectedStrategy(strats[0]);
       setSubject(strats[0].suggestedSubject);
       setBody(strats[0].suggestedBody);
     }
-    setLoading(false);
+  }, [clients, businessName, selectedStrategy]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await refresh();
     setRefreshing(false);
-
-    if (isRefresh) {
-      toast({ title: 'Analysis refreshed', description: `Re-evaluated ${allClients.length} clients. ${strats.length} strategies recommended.` });
-    }
-  }, [businessName, selectedStrategy]);
-
-  useEffect(() => { fetchClients(); }, [fetchClients]);
-
-  const handleRefresh = () => fetchClients(true);
+    toast({ title: 'Analysis refreshed', description: `Re-evaluated ${clients.length} clients. ${strategies.length} strategies recommended.` });
+  };
 
   const handleSelectStrategy = (s: AiStrategy) => {
     setSelectedStrategy(s);
@@ -208,6 +199,7 @@ export default function ConsultantPage() {
       toast({ title: 'Could not create campaign', description: error.message, variant: 'destructive' });
     } else {
       toast({ title: 'Campaign created', description: `"${selectedStrategy.title}" saved as a draft. Go to Campaigns to launch it.` });
+      refreshCampaigns();
     }
     setGenerating(false);
   };

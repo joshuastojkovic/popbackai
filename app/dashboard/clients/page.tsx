@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { parseCSV, clientStatus, daysSinceVisit, ParsedClient, ParseResult, CHURN_TIER_CONFIG, ChurnTier } from '@/lib/csvParser';
 import CSVDropZone from '@/components/dashboard/CSVDropZone';
 import { AskPopbackAI } from '@/components/dashboard/AskPopbackAI';
-import { AnalyticsClient } from '@/lib/analytics';
+import { useClientData } from '@/contexts/ClientDataContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -180,7 +180,7 @@ export default function ClientListPage() {
 
   // AI chatbot state
   const [chatOpen, setChatOpen] = useState(false);
-  const [allClientsForAI, setAllClientsForAI] = useState<AnalyticsClient[]>([]);
+  const { clients: sharedClients, refreshClients } = useClientData();
 
   // ── data fetching ──────────────────────────────────────────────────────
 
@@ -245,14 +245,10 @@ export default function ClientListPage() {
     fetchClients();
   }, [fetchClients]);
 
-  // Fetch all clients for AI chatbot (lightweight, only when chat opens)
-  useEffect(() => {
-    if (chatOpen && allClientsForAI.length === 0) {
-      supabase.from('clients').select('id, name, email, phone, last_visit_date, lifetime_spend, preferred_service, preferred_staff, churn_tier, review_requested, review_completed').then(({ data }) => {
-        setAllClientsForAI((data ?? []) as AnalyticsClient[]);
-      });
-    }
-  }, [chatOpen, allClientsForAI.length]);
+  // Sync local client changes to shared context
+  const handleRefreshShared = () => {
+    refreshClients();
+  };
 
   // Reset page when filters change
   useEffect(() => {
@@ -332,6 +328,7 @@ export default function ClientListPage() {
     setParseResult(null);
     setImportExpanded(false);
     await fetchClients();
+    refreshClients();
     setUploading(false);
   };
 
@@ -351,6 +348,7 @@ export default function ClientListPage() {
       setClients((prev) => prev.filter((c) => !ids.includes(c.id)));
       setTotalCount((prev) => Math.max(0, prev - ids.length));
       setSelected(new Set());
+      refreshClients();
     }
   };
 
@@ -393,6 +391,7 @@ export default function ClientListPage() {
         notes: editForm.notes.trim() || null,
       } : c));
       setEditClient(null);
+      refreshClients();
     }
   };
 
@@ -1143,7 +1142,7 @@ export default function ClientListPage() {
         <Brain className="w-5 h-5" />
         <span className="font-semibold text-sm">Ask Popback AI</span>
       </button>
-      <AskPopbackAI open={chatOpen} onOpenChange={setChatOpen} clients={allClientsForAI} />
+      <AskPopbackAI open={chatOpen} onOpenChange={setChatOpen} clients={sharedClients} />
     </div>
   );
 }

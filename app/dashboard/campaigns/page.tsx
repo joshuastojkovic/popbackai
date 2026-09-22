@@ -54,6 +54,7 @@ import {
   Eye,
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { useClientData } from '@/contexts/ClientDataContext';
 
 // ── types ────────────────────────────────────────────────────────────────────
 
@@ -328,6 +329,8 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
         onCreated();
         return;
       }
+      // Success — campaign sent
+      // Toast is handled by parent page via onCreated/fetchData
     }
 
     onCreated();
@@ -617,6 +620,7 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
 
 export default function CampaignsPage() {
   const { toast } = useToast();
+  const { campaigns: contextCampaigns, refreshCampaigns, refreshClients } = useClientData();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -624,6 +628,13 @@ export default function CampaignsPage() {
   const [launchRec, setLaunchRec] = useState<AiRecommendation | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Campaign | null>(null);
   const [showDeleted, setShowDeleted] = useState(false);
+
+  // Sync from shared context
+  useEffect(() => {
+    if (contextCampaigns.length > 0 || !loading) {
+      setCampaigns(contextCampaigns as unknown as Campaign[]);
+    }
+  }, [contextCampaigns, loading]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -647,7 +658,10 @@ export default function CampaignsPage() {
     if (!campaignRes.error && campaignRes.data) setCampaigns(campaignRes.data as Campaign[]);
     if (!clientRes.error && clientRes.data) setClients(clientRes.data);
     setLoading(false);
-  }, []);
+    // Also refresh shared context for other views
+    refreshCampaigns();
+    refreshClients();
+  }, [refreshCampaigns, refreshClients]);
 
   useEffect(() => {
     fetchData();
@@ -658,17 +672,20 @@ export default function CampaignsPage() {
   const handleCancelCampaign = async (c: Campaign) => {
     await supabase.from('campaigns').update({ status: 'cancelled' }).eq('id', c.id);
     setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, status: 'cancelled' } : x));
+    refreshCampaigns();
   };
 
   const handleDeleteCampaign = async (c: Campaign) => {
     await supabase.from('campaigns').update({ deleted_at: new Date().toISOString() }).eq('id', c.id);
     setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, deleted_at: new Date().toISOString() } : x));
     setDeleteTarget(null);
+    refreshCampaigns();
   };
 
   const handleRestoreCampaign = async (c: Campaign) => {
     await supabase.from('campaigns').update({ deleted_at: null }).eq('id', c.id);
     setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, deleted_at: null } : x));
+    refreshCampaigns();
   };
 
   const handleStatusToggle = async (c: Campaign) => {
@@ -696,12 +713,15 @@ export default function CampaignsPage() {
         toast({ title: 'Campaign launch failed', description: result.error ?? 'Please try again.', variant: 'destructive' });
         return;
       }
+      // Success — show confirmation toast and sync all views
+      toast({ title: 'Campaign sent!', description: `${c.recipient_count} clients moved to Active Campaigns.` });
       fetchData();
       return;
     }
     const newStatus = c.status === 'active' ? 'paused' : 'active';
     await supabase.from('campaigns').update({ status: newStatus }).eq('id', c.id);
     setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, status: newStatus } : x));
+    refreshCampaigns();
   };
 
   const recommendations = buildRecommendations(clients);

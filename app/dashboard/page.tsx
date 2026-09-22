@@ -1,10 +1,9 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '@/lib/supabase';
-import { computeChurnSegments, totalRecoverableRevenue, AnalyticsClient, ChurnSegment } from '@/lib/analytics';
-import { CHURN_TIER_CONFIG, ChurnTier } from '@/lib/csvParser';
+import { useClientData } from '@/contexts/ClientDataContext';
+import { ChurnTier, CHURN_TIER_CONFIG } from '@/lib/csvParser';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
@@ -65,81 +64,32 @@ export default function DashboardPage() {
   const firstName = profile?.full_name?.split(' ')[0] ?? 'there';
   const businessName = profile?.business_name ?? 'your business';
 
-  const [clients, setClients] = useState<AnalyticsClient[]>([]);
-  const [segments, setSegments] = useState<ChurnSegment[]>([]);
-  const [campaignData, setCampaignData] = useState<CampaignData[]>([]);
-  const [timeline, setTimeline] = useState<TimelinePoint[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { clients, campaigns, segments, stats, loading, refresh } = useClientData();
   const [chatOpen, setChatOpen] = useState(false);
-  const [stats, setStats] = useState({
-    totalClients: 0,
-    atRiskClients: 0,
-    recoverableRevenue: 0,
-    conversionRate: 0,
-    totalSent: 0,
-    totalOpened: 0,
-    totalReEngaged: 0,
-    activeCampaigns: 0,
-  });
 
-  const fetchStats = useCallback(async () => {
+  // Derive chart data from shared campaigns state
+  const { campaignData, timeline } = useMemo(() => {
     const now = new Date();
+    const activeCampaignsList = campaigns.filter(c => !c.deleted_at);
 
-    const [clientsRes, campaignsRes] = await Promise.all([
-      supabase.from('clients').select('id, name, email, phone, last_visit_date, lifetime_spend, preferred_service, preferred_staff, churn_tier, review_requested, review_completed'),
-      supabase.from('campaigns').select('id, name, status, sent, opened, converted, created_at, launched_at, deleted_at').is('deleted_at', null),
-    ]);
-
-    const allClients = (clientsRes.data ?? []) as AnalyticsClient[];
-    setClients(allClients);
-
-    const churnSegments = computeChurnSegments(allClients);
-    setSegments(churnSegments);
-
-    const atRisk = churnSegments
-      .filter(s => s.tier !== 'active')
-      .reduce((sum, s) => sum + s.count, 0);
-    const recoverable = totalRecoverableRevenue(churnSegments);
-
-    const allCampaigns = (campaignsRes.data ?? []) as Array<{ id: string; name: string; status: string; sent: number; opened: number; converted: number; created_at: string; launched_at: string | null }>;
-    const activeCampaigns = allCampaigns.filter(c => c.status === 'active').length;
-    const totalReEngaged = allCampaigns.reduce((s, c) => s + (c.converted ?? 0), 0);
-    const totalSent = allCampaigns.reduce((s, c) => s + (c.sent ?? 0), 0);
-    const totalOpened = allCampaigns.reduce((s, c) => s + Math.min(c.opened ?? 0, c.sent ?? 0), 0);
-    const conversionRate = totalSent > 0 ? Math.min(100, Math.round((totalReEngaged / totalSent) * 100)) : 0;
-
-    setStats({
-      totalClients: allClients.length,
-      atRiskClients: atRisk,
-      recoverableRevenue: recoverable,
-      conversionRate,
-      totalSent,
-      totalOpened,
-      totalReEngaged,
-      activeCampaigns,
-    });
-
-    // Campaign chart data
-    const chartData = allCampaigns
-      .filter(c => (c.sent ?? 0) > 0)
-      .sort((a, b) => (b.sent ?? 0) - (a.sent ?? 0))
+    const chartData = activeCampaignsList
+      .filter(c => c.sent > 0)
+      .sort((a, b) => b.sent - a.sent)
       .slice(0, 6)
       .map(c => ({
         name: c.name.length > 15 ? c.name.substring(0, 15) + '...' : c.name,
-        sent: c.sent ?? 0,
-        opened: c.opened ?? 0,
-        converted: c.converted ?? 0,
+        sent: c.sent,
+        opened: c.opened,
+        converted: c.converted,
       }));
-    setCampaignData(chartData);
 
-    // Timeline
     const timelineMap = new Map<string, { sent: number; opened: number }>();
-    for (const c of allCampaigns) {
+    for (const c of activeCampaignsList) {
       if (!c.launched_at) continue;
       const d = new Date(c.launched_at).toISOString().split('T')[0];
       const existing = timelineMap.get(d) ?? { sent: 0, opened: 0 };
-      existing.sent += c.sent ?? 0;
-      existing.opened += c.opened ?? 0;
+      existing.sent += c.sent;
+      existing.opened += c.opened;
       timelineMap.set(d, existing);
     }
     const points: TimelinePoint[] = [];
@@ -148,11 +98,9 @@ export default function DashboardPage() {
       const data = timelineMap.get(d) ?? { sent: 0, opened: 0 };
       points.push({ date: d, sent: data.sent, opened: data.opened });
     }
-    setTimeline(points);
-    setLoading(false);
-  }, []);
 
-  useEffect(() => { fetchStats(); }, [fetchStats]);
+    return { campaignData: chartData, timeline: points };
+  }, [campaigns]);
 
   const isEmpty = stats.totalClients === 0;
   const overallOpenRate = stats.totalSent > 0 ? Math.min(100, Math.round((stats.totalOpened / stats.totalSent) * 100)) : 0;
@@ -160,7 +108,10 @@ export default function DashboardPage() {
 
   // Churn distribution chart data
   const churnChartData = segments.map(s => ({
-    name: CHURN_TIER_CONFIG[s.tier].label,
+    name: s.tier === 'active' ? 'Active' :
+          s.tier === 'slipping_away' ? 'Slipping' :
+          s.tier === 'high_value_at_risk' ? 'VIP At Risk' :
+          s.tier === 'lapsed' ? 'Lapsed' : 'Lost',
     count: s.count,
     color: CHURN_COLORS[s.tier],
   }));
