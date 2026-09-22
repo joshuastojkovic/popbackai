@@ -13,11 +13,15 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import {
   Brain,
   Sparkles,
-  TrendingUp,
   Users,
-  DollarSign,
   ChevronRight,
   Mail,
   MessageSquare,
@@ -25,23 +29,24 @@ import {
   Copy,
   Check,
   Zap,
-  AlertTriangle,
   Target,
   Lightbulb,
-  Send,
   RefreshCw,
-  ArrowRight,
   Repeat,
+  ChevronDown,
+  ChevronUp,
+  HelpCircle,
+  Clock,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useToast } from '@/hooks/use-toast';
 
 type Channel = 'email' | 'sms' | 'whatsapp';
 
-const CHANNEL_CONFIG: Record<Channel, { label: string; icon: typeof Mail }> = {
-  email: { label: 'Email', icon: Mail },
-  sms: { label: 'SMS', icon: MessageSquare },
-  whatsapp: { label: 'WhatsApp', icon: Smartphone },
+const CHANNEL_CONFIG: Record<Channel, { label: string; icon: typeof Mail; comingSoon: boolean }> = {
+  email: { label: 'Email', icon: Mail, comingSoon: false },
+  sms: { label: 'SMS', icon: MessageSquare, comingSoon: true },
+  whatsapp: { label: 'WhatsApp', icon: Smartphone, comingSoon: true },
 };
 
 const PERSONALIZATION_TAGS = [
@@ -66,6 +71,24 @@ function PriorityBadge({ priority }: { priority: 'high' | 'medium' | 'low' }) {
   );
 }
 
+function ComingSoonBadge() {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-amber-700 text-xs font-semibold cursor-help">
+            <Clock className="w-2.5 h-2.5" />
+            Soon
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          <p className="text-xs">SMS Integration Coming Soon — Use White-Label Email or Export Copy Currently</p>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 export default function ConsultantPage() {
   const { profile } = useAuth();
   const businessName = profile?.business_name ?? 'your business';
@@ -75,14 +98,17 @@ export default function ConsultantPage() {
   const [strategies, setStrategies] = useState<AiStrategy[]>([]);
   const [segments, setSegments] = useState<ChurnSegment[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [selectedStrategy, setSelectedStrategy] = useState<AiStrategy | null>(null);
   const [channel, setChannel] = useState<Channel>('email');
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [copied, setCopied] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [expandedWhy, setExpandedWhy] = useState<string | null>(null);
 
-  const fetchClients = useCallback(async () => {
+  const fetchClients = useCallback(async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
     const { data } = await supabase.from('clients').select('id, name, email, phone, last_visit_date, lifetime_spend, preferred_service, preferred_staff, churn_tier, review_requested, review_completed');
     const allClients = (data ?? []) as AnalyticsClient[];
     setClients(allClients);
@@ -93,24 +119,33 @@ export default function ConsultantPage() {
     const strats = buildAiStrategies(allClients, businessName);
     setStrategies(strats);
 
-    if (strats.length > 0 && !selectedStrategy) {
+    if (strats.length > 0 && (!selectedStrategy || isRefresh)) {
       setSelectedStrategy(strats[0]);
       setSubject(strats[0].suggestedSubject);
       setBody(strats[0].suggestedBody);
     }
     setLoading(false);
+    setRefreshing(false);
+
+    if (isRefresh) {
+      toast({ title: 'Analysis refreshed', description: `Re-evaluated ${allClients.length} clients. ${strats.length} strategies recommended.` });
+    }
   }, [businessName, selectedStrategy]);
 
   useEffect(() => { fetchClients(); }, [fetchClients]);
+
+  const handleRefresh = () => fetchClients(true);
 
   const handleSelectStrategy = (s: AiStrategy) => {
     setSelectedStrategy(s);
     setChannel('email');
     setSubject(s.suggestedSubject);
     setBody(s.suggestedBody);
+    setExpandedWhy(null);
   };
 
   const handleChannelChange = (ch: Channel) => {
+    if (CHANNEL_CONFIG[ch].comingSoon) return;
     setChannel(ch);
     if (!selectedStrategy) return;
     if (ch === 'email') {
@@ -128,7 +163,7 @@ export default function ConsultantPage() {
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-    toast({ title: 'Copied to clipboard', description: 'Paste into your sending tool (Klaviyo, Twilio, Mailchimp, etc.)' });
+    toast({ title: 'Copied to clipboard', description: 'Paste into your sending tool (Klaviyo, Mailchimp, etc.)' });
   };
 
   const handleInsertTag = (tag: string) => {
@@ -146,7 +181,6 @@ export default function ConsultantPage() {
       return;
     }
 
-    // Create a campaign from this strategy
     const tier = selectedStrategy.tier;
     const segmentMap: Record<string, string> = {
       slipping_away: 'lapsed_60',
@@ -160,10 +194,10 @@ export default function ConsultantPage() {
       user_id: session.user.id,
       name: selectedStrategy.title,
       status: 'draft',
-      channel: channel === 'email' ? 'email' : 'sms',
+      channel: 'email',
       target_segment: segmentMap[tier] ?? 'all_lapsed',
       target_description: CHURN_TIER_CONFIG[tier as ChurnTier]?.label ?? tier,
-      message_subject: channel === 'email' ? subject.trim() : null,
+      message_subject: subject.trim(),
       message_body: body.trim(),
       recipient_count: selectedStrategy.clientCount,
     };
@@ -181,7 +215,6 @@ export default function ConsultantPage() {
   const recoverableRevenue = totalRecoverableRevenue(segments);
   const atRiskCount = segments.filter(s => s.tier !== 'active').reduce((sum, s) => sum + s.count, 0);
 
-  // Preview with a sample client
   const sampleClient = selectedStrategy
     ? clients.find(c => c.churn_tier === selectedStrategy.tier) ?? clients[0]
     : null;
@@ -197,8 +230,18 @@ export default function ConsultantPage() {
             <Brain className="w-5 h-5 text-blue-600" />
             <h2 className="text-xl font-bold text-gray-900">AI Retention Consultant</h2>
           </div>
-          <p className="text-sm text-gray-500">Your personalised win-back strategy, generated from your client data</p>
+          <p className="text-sm text-gray-500">Your AI-powered win-back strategist — analyzes your client data and generates personalised recovery campaigns</p>
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className="border-gray-200 text-gray-700 font-semibold gap-1.5 self-start"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+          {refreshing ? 'Refreshing...' : 'Refresh Analysis'}
+        </Button>
       </div>
 
       {/* AI Summary Banner */}
@@ -230,7 +273,7 @@ export default function ConsultantPage() {
           </div>
           <h3 className="text-base font-bold text-gray-700 mb-1">All clients are active</h3>
           <p className="text-sm text-gray-400 max-w-xs mb-5">
-            No at-risk clients detected. Import more clients or check back later as visit patterns change.
+            No at-risk clients detected. Import more clients or refresh later as visit patterns change.
           </p>
           <Link href="/dashboard/clients">
             <Button variant="outline" size="sm" className="gap-1.5">
@@ -250,57 +293,74 @@ export default function ConsultantPage() {
             {strategies.map((s) => {
               const isActive = selectedStrategy?.id === s.id;
               const tierConfig = CHURN_TIER_CONFIG[s.tier as ChurnTier];
+              const isWhyExpanded = expandedWhy === s.id;
               return (
-                <button
-                  key={s.id}
-                  onClick={() => handleSelectStrategy(s)}
-                  className={`w-full text-left p-4 rounded-xl border transition-all ${
-                    isActive
-                      ? 'border-blue-300 bg-blue-50/50 shadow-sm'
-                      : 'border-gray-100 hover:border-blue-200 hover:bg-blue-50/30'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3 mb-2">
-                    <div className="flex items-center gap-2">
-                      <span className={`w-2.5 h-2.5 rounded-full ${tierConfig?.dot ?? 'bg-gray-400'}`} />
-                      <span className="font-bold text-gray-900 text-sm">{s.title}</span>
-                    </div>
-                    <PriorityBadge priority={s.priority} />
-                  </div>
-                  <p className="text-xs text-gray-500 leading-relaxed mb-3">{s.insight}</p>
-                  <div className="flex items-center gap-4 flex-wrap">
-                    <span className="text-xs font-semibold text-gray-700">
-                      <span className="text-blue-600">{s.clientCount}</span> clients
-                    </span>
-                    <span className="text-xs font-semibold text-emerald-700">
-                      ~{s.estimatedRevenue} recoverable
-                    </span>
-                    <div className="flex items-center gap-1">
-                      {s.channels.map(ch => {
-                        const Icon = ch === 'Email' ? Mail : ch === 'SMS' ? MessageSquare : Smartphone;
-                        return <Icon key={ch} className="w-3 h-3 text-gray-400" />;
-                      })}
-                    </div>
-                  </div>
-                  {isActive && (
-                    <div className="mt-3 pt-3 border-t border-blue-100">
-                      <div className="flex items-start gap-2">
-                        <Target className="w-3.5 h-3.5 text-blue-600 flex-shrink-0 mt-0.5" />
-                        <div>
-                          <div className="text-xs font-semibold text-gray-700 mb-0.5">Recommendation</div>
-                          <p className="text-xs text-gray-500">{s.recommendation}</p>
-                        </div>
+                <div key={s.id} className={`rounded-xl border transition-all ${isActive ? 'border-blue-300 bg-blue-50/50 shadow-sm' : 'border-gray-100 hover:border-blue-200 hover:bg-blue-50/30'}`}>
+                  <button
+                    onClick={() => handleSelectStrategy(s)}
+                    className="w-full text-left p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3 mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2.5 h-2.5 rounded-full ${tierConfig?.dot ?? 'bg-gray-400'}`} />
+                        <span className="font-bold text-gray-900 text-sm">{s.title}</span>
                       </div>
-                      <div className="flex items-start gap-2 mt-2">
-                        <Zap className="w-3.5 h-3.5 text-amber-500 flex-shrink-0 mt-0.5" />
-                        <div>
-                          <div className="text-xs font-semibold text-gray-700 mb-0.5">Suggested Offer</div>
-                          <p className="text-xs text-gray-500">{s.offer}</p>
+                      <PriorityBadge priority={s.priority} />
+                    </div>
+                    <p className="text-xs text-gray-500 leading-relaxed mb-3">{s.insight}</p>
+                    <div className="flex items-center gap-4 flex-wrap">
+                      <span className="text-xs font-semibold text-gray-700">
+                        <span className="text-blue-600">{s.clientCount}</span> clients
+                      </span>
+                      <span className="text-xs font-semibold text-emerald-700">
+                        ~{s.estimatedRevenue} recoverable
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <Mail className="w-3 h-3 text-gray-400" />
+                        <span className="text-xs text-gray-400">Email</span>
+                        <span className="text-xs text-gray-300 mx-0.5">·</span>
+                        <span className="text-xs text-gray-400 line-through">SMS</span>
+                        <ComingSoonBadge />
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* Why this recommendation? */}
+                  {isActive && (
+                    <div className="mt-1 pt-0 px-4 pb-4">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setExpandedWhy(isWhyExpanded ? null : s.id); }}
+                        className="flex items-center gap-1.5 text-xs font-semibold text-blue-600 hover:text-blue-700"
+                      >
+                        <HelpCircle className="w-3.5 h-3.5" />
+                        Why this recommendation?
+                        {isWhyExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                      </button>
+                      {isWhyExpanded && (
+                        <div className="mt-2 p-3 rounded-lg bg-blue-50 border border-blue-100">
+                          <p className="text-xs text-gray-600 leading-relaxed">{s.whyExplanation}</p>
+                        </div>
+                      )}
+
+                      <div className="mt-3 pt-3 border-t border-blue-100">
+                        <div className="flex items-start gap-2">
+                          <Target className="w-3.5 h-3.5 text-blue-600 flex-shrink-0 mt-0.5" />
+                          <div>
+                            <div className="text-xs font-semibold text-gray-700 mb-0.5">Recommendation</div>
+                            <p className="text-xs text-gray-500">{s.recommendation}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-2 mt-2">
+                          <Zap className="w-3.5 h-3.5 text-amber-500 flex-shrink-0 mt-0.5" />
+                          <div>
+                            <div className="text-xs font-semibold text-gray-700 mb-0.5">Suggested Offer</div>
+                            <p className="text-xs text-gray-500">{s.offer}</p>
+                          </div>
                         </div>
                       </div>
                     </div>
                   )}
-                </button>
+                </div>
               );
             })}
           </div>
@@ -317,30 +377,38 @@ export default function ConsultantPage() {
                 <CardContent className="p-5 space-y-4">
                   {/* Channel toggle */}
                   <div>
-                    <Label className="text-xs font-semibold text-gray-700 mb-1.5 block">Channel</Label>
+                    <Label className="text-xs font-semibold text-gray-700 mb-1.5 block">Delivery Channel</Label>
                     <div className="flex gap-2">
                       {(['email', 'sms', 'whatsapp'] as Channel[]).map(ch => {
-                        const Icon = CHANNEL_CONFIG[ch].icon;
-                        const isAvailable = selectedStrategy.channels.some(c => c.toLowerCase() === ch);
+                        const config = CHANNEL_CONFIG[ch];
+                        const Icon = config.icon;
                         return (
                           <button
                             key={ch}
-                            onClick={() => isAvailable && handleChannelChange(ch)}
-                            disabled={!isAvailable}
-                            className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-semibold transition-all ${
-                              channel === ch
+                            onClick={() => handleChannelChange(ch)}
+                            disabled={config.comingSoon}
+                            className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-semibold transition-all relative ${
+                              channel === ch && !config.comingSoon
                                 ? 'bg-blue-600 text-white border-blue-600'
-                                : isAvailable
-                                  ? 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
-                                  : 'bg-gray-50 text-gray-300 border-gray-100 cursor-not-allowed'
+                                : config.comingSoon
+                                  ? 'bg-gray-50 text-gray-300 border-gray-100 cursor-not-allowed'
+                                  : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
                             }`}
                           >
                             <Icon className="w-3.5 h-3.5" />
-                            {CHANNEL_CONFIG[ch].label}
+                            {config.label}
+                            {config.comingSoon && (
+                              <span className="absolute -top-1.5 -right-1.5 px-1 py-0.5 rounded bg-amber-100 text-amber-700 text-[8px] font-bold leading-none">SOON</span>
+                            )}
                           </button>
                         );
                       })}
                     </div>
+                    {channel === 'email' && (
+                      <p className="text-xs text-emerald-600 mt-1.5 flex items-center gap-1">
+                        <Check className="w-3 h-3" /> White-label email is active and ready to send
+                      </p>
+                    )}
                   </div>
 
                   {/* Subject (email only) */}
@@ -363,7 +431,7 @@ export default function ConsultantPage() {
                     <Textarea
                       value={body}
                       onChange={e => setBody(e.target.value)}
-                      rows={channel === 'sms' ? 4 : 8}
+                      rows={8}
                       className="border-gray-200 resize-none text-sm"
                     />
                   </div>

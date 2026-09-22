@@ -138,7 +138,7 @@ function buildRecommendations(clients: ClientRow[]): AiRecommendation[] {
       urgency: 'high',
       reason: `${lapsed90.length} clients haven't been in for 3–6 months — the sweet spot where a timely offer is most likely to bring them back.`,
       suggestedSubject: 'We miss you — here\'s something special',
-      suggestedBody: `Hi [Name],\n\nIt's been a while since your last visit and we'd love to see you back.\n\nAs a valued client, we'd like to offer you a complimentary upgrade on your next appointment. Simply mention this message when you book.\n\nBook now — we can't wait to see you.\n\n[Your business name]`,
+      suggestedBody: `Hi {{first_name}},\n\nIt's been a while since your last visit and we'd love to see you back.\n\nAs a valued client, we'd like to offer you a complimentary upgrade on your next appointment. Simply mention this message when you book.\n\nBook now — we can't wait to see you.\n\n${'[Your business name]'}`,
     });
   }
 
@@ -151,7 +151,7 @@ function buildRecommendations(clients: ClientRow[]): AiRecommendation[] {
       urgency: 'medium',
       reason: `${lapsed180.length} clients are 6–12 months lapsed. A stronger incentive like a discount will be needed to re-engage them.`,
       suggestedSubject: 'It\'s been too long — 15% off your next visit',
-      suggestedBody: `Hi [Name],\n\nWe've noticed it's been a while since your last appointment and we'd love to welcome you back.\n\nEnjoy 15% off your next visit — just mention this message when you book. Valid for the next 30 days.\n\nWe look forward to seeing you.\n\n[Your business name]`,
+      suggestedBody: `Hi {{first_name}},\n\nWe've noticed it's been a while since your last appointment and we'd love to welcome you back.\n\nEnjoy 15% off your next visit — just mention this message when you book. Valid for the next 30 days.\n\nWe look forward to seeing you.\n\n${'[Your business name]'}`,
     });
   }
 
@@ -164,7 +164,7 @@ function buildRecommendations(clients: ClientRow[]): AiRecommendation[] {
       urgency: 'high',
       reason: `${lapsed60.length} clients are just 2–3 months overdue — a gentle reminder now is the highest-conversion opportunity.`,
       suggestedSubject: 'Time for your next appointment?',
-      suggestedBody: `Hi [Name],\n\nJust a friendly reminder that it might be time to book your next visit with us.\n\nWe have availability this week — click below to book at a time that suits you.\n\nSee you soon!\n\n[Your business name]`,
+      suggestedBody: `Hi {{first_name}},\n\nJust a friendly reminder that it might be time to book your next visit with us.\n\nWe have availability this week — click below to book at a time that suits you.\n\nSee you soon!\n\n${'[Your business name]'}`,
     });
   }
 
@@ -177,7 +177,7 @@ function buildRecommendations(clients: ClientRow[]): AiRecommendation[] {
       urgency: 'low',
       reason: `${lapsed365.length} clients haven't visited in over a year. A bold win-back offer is the best chance to recover these relationships.`,
       suggestedSubject: 'We\'d love to have you back — exclusive returning client offer',
-      suggestedBody: `Hi [Name],\n\nWe know it's been a while, and we've missed you.\n\nAs a special welcome back, we're offering 20% off your first appointment when you return. No conditions, just our way of saying we're glad you're back.\n\nBook anytime in the next 60 days.\n\n[Your business name]`,
+      suggestedBody: `Hi {{first_name}},\n\nWe know it's been a while, and we've missed you.\n\nAs a special welcome back, we're offering 20% off your first appointment when you return. No conditions, just our way of saying we're glad you're back.\n\nBook anytime in the next 60 days.\n\n${'[Your business name]'}`,
     });
   }
 
@@ -344,8 +344,8 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
           </DialogTitle>
           <p className="text-sm text-gray-500 mt-0.5">
             {step === 'ai'
-              ? 'Based on your client list, here are the best win-back opportunities right now.'
-              : 'Customise your campaign before launching.'}
+              ? 'Your AI Consultant has analyzed your client list. Here are the best win-back opportunities right now.'
+              : 'Customise your white-label campaign before launching.'}
           </p>
         </DialogHeader>
 
@@ -517,11 +517,11 @@ function CreateCampaignModal({ open, onClose, onCreated, clients, initialRec }: 
                   <Textarea
                     value={body}
                     onChange={e => setBody(e.target.value)}
-                    placeholder="Write your message here... Use [Name] to personalise."
+                    placeholder="Write your message here... Use {{first_name}} to personalise."
                     rows={7}
                     className="border-gray-200 resize-none text-sm"
                   />
-                  <p className="text-xs text-gray-400 mt-1">Use [Name] to insert the client's name automatically.</p>
+                  <p className="text-xs text-gray-400 mt-1">{'Use {{first_name}}, {{last_service}}, {{favorite_barber}} to personalise. Tags are replaced automatically when sending.'}</p>
                 </div>
 
                 {/* Schedule */}
@@ -729,7 +729,7 @@ export default function CampaignsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold text-gray-900">Win-Back Campaigns</h2>
-          <p className="text-sm text-gray-500 mt-0.5">Re-engage clients who haven't visited recently</p>
+          <p className="text-sm text-gray-500 mt-0.5">Launch white-label win-back campaigns to re-engage lapsed clients</p>
         </div>
         <Button
           onClick={() => { setLaunchRec(null); setShowCreate(true); }}

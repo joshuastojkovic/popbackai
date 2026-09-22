@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { parseCSV, clientStatus, daysSinceVisit, ParsedClient, ParseResult, CHURN_TIER_CONFIG, ChurnTier } from '@/lib/csvParser';
 import CSVDropZone from '@/components/dashboard/CSVDropZone';
+import { AskPopbackAI } from '@/components/dashboard/AskPopbackAI';
+import { AnalyticsClient } from '@/lib/analytics';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -48,6 +50,7 @@ import {
   ChevronRight,
   Repeat,
   Star,
+  Brain,
 } from 'lucide-react';
 
 type Client = {
@@ -175,6 +178,10 @@ export default function ClientListPage() {
   const [detailRecipients, setDetailRecipients] = useState<CampaignRecipient[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
 
+  // AI chatbot state
+  const [chatOpen, setChatOpen] = useState(false);
+  const [allClientsForAI, setAllClientsForAI] = useState<AnalyticsClient[]>([]);
+
   // ── data fetching ──────────────────────────────────────────────────────
 
   const fetchClients = useCallback(async () => {
@@ -237,6 +244,15 @@ export default function ClientListPage() {
   useEffect(() => {
     fetchClients();
   }, [fetchClients]);
+
+  // Fetch all clients for AI chatbot (lightweight, only when chat opens)
+  useEffect(() => {
+    if (chatOpen && allClientsForAI.length === 0) {
+      supabase.from('clients').select('id, name, email, phone, last_visit_date, lifetime_spend, preferred_service, preferred_staff, churn_tier, review_requested, review_completed').then(({ data }) => {
+        setAllClientsForAI((data ?? []) as AnalyticsClient[]);
+      });
+    }
+  }, [chatOpen, allClientsForAI.length]);
 
   // Reset page when filters change
   useEffect(() => {
@@ -1118,6 +1134,16 @@ export default function ClientListPage() {
           )}
         </SheetContent>
       </Sheet>
+
+      {/* Ask Popback AI floating button */}
+      <button
+        onClick={() => setChatOpen(true)}
+        className="fixed bottom-6 right-6 z-40 flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 rounded-full shadow-lg shadow-blue-300 transition-all"
+      >
+        <Brain className="w-5 h-5" />
+        <span className="font-semibold text-sm">Ask Popback AI</span>
+      </button>
+      <AskPopbackAI open={chatOpen} onOpenChange={setChatOpen} clients={allClientsForAI} />
     </div>
   );
 }

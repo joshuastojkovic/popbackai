@@ -25,8 +25,10 @@ import {
   Brain,
   Repeat,
   Calendar,
+  MessageSquare,
 } from 'lucide-react';
 import Link from 'next/link';
+import { AskPopbackAI } from '@/components/dashboard/AskPopbackAI';
 import {
   ResponsiveContainer,
   AreaChart,
@@ -68,6 +70,7 @@ export default function DashboardPage() {
   const [campaignData, setCampaignData] = useState<CampaignData[]>([]);
   const [timeline, setTimeline] = useState<TimelinePoint[]>([]);
   const [loading, setLoading] = useState(true);
+  const [chatOpen, setChatOpen] = useState(false);
   const [stats, setStats] = useState({
     totalClients: 0,
     atRiskClients: 0,
@@ -449,6 +452,20 @@ export default function DashboardPage() {
               ))}
             </div>
           </div>
+        </>
+      )}
+
+      {/* Ask Popback AI floating button */}
+      {!loading && clients.length > 0 && (
+        <>
+          <button
+            onClick={() => setChatOpen(true)}
+            className="fixed bottom-6 right-6 z-40 flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 rounded-full shadow-lg shadow-blue-300 transition-all"
+          >
+            <Brain className="w-5 h-5" />
+            <span className="font-semibold text-sm">Ask Popback AI</span>
+          </button>
+          <AskPopbackAI open={chatOpen} onOpenChange={setChatOpen} clients={clients} />
         </>
       )}
     </div>
